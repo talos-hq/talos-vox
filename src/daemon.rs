@@ -1388,6 +1388,23 @@ impl Daemon {
         // ever apply to a recording that was live, or already requested,
         // when it was issued (#606).
         discard_stale_cancel(self.start_request);
+        // Publish preparation before the synchronous ducking hook. Capture is
+        // still closed, so neither the cue nor its acoustic tail enters audio.
+        self.update_state("preparing");
+        if let Some(cmd) = &self.config.output.pre_recording_command {
+            if let Err(e) = output::run_hook(cmd, "pre_recording").await {
+                tracing::error!("Pre-recording preparation failed: {}", e);
+                self.update_state("idle");
+                return Err(());
+            }
+        }
+        if let Some(ref feedback) = self.audio_feedback {
+            if let Err(e) = feedback.play_start_and_wait() {
+                tracing::warn!("Start cue failed: {}", e);
+            }
+            tokio::time::sleep(Duration::from_millis(75)).await;
+        }
+        tracing::info!("Start cue finished; opening microphone");
         match audio::create_capture(&self.config.audio) {
             Ok(mut capture) => match capture.start().await {
                 Ok(chunk_rx) => {
@@ -1420,12 +1437,14 @@ impl Daemon {
                     Ok(capture)
                 }
                 Err(e) => {
+                    self.update_state("idle");
                     tracing::error!("Failed to start audio: {}", e);
                     self.play_feedback(SoundEvent::Error);
                     Err(())
                 }
             },
             Err(e) => {
+                self.update_state("idle");
                 tracing::error!("Failed to create audio capture: {}", e);
                 self.play_feedback(SoundEvent::Error);
                 Err(())
@@ -3258,8 +3277,8 @@ impl Daemon {
                     let audio_duration = samples.len() as f32 / 16000.0;
 
                     // Skip if too short (likely accidental press)
-                    if audio_duration < 0.3 {
-                        tracing::debug!("Recording too short ({:.2}s), ignoring", audio_duration);
+                    if samples.len() < 8_000 {
+                        tracing::info!("Discarding recording shorter than 500 ms ({:.2}s)", audio_duration);
                         self.publish_empty_outcome();
                         self.reset_to_idle(state).await;
                         return false;
@@ -4135,14 +4154,6 @@ impl Daemon {
                                                 };
                                             }
                                             self.update_state("recording");
-                                            self.play_feedback(SoundEvent::RecordingStart);
-
-                                            // Run pre-recording hook (e.g., enter compositor submap for cancel)
-                                            if let Some(cmd) = &self.config.output.pre_recording_command {
-                                                if let Err(e) = output::run_hook(cmd, "pre_recording").await {
-                                                    tracing::warn!("{}", e);
-                                                }
-                                            }
                                         }
                                         Err(()) => {
                                             // Helper already logged and played the error sound.
@@ -4282,14 +4293,6 @@ impl Daemon {
                                                 };
                                             }
                                             self.update_state("recording");
-                                            self.play_feedback(SoundEvent::RecordingStart);
-
-                                            // Run pre-recording hook (e.g., enter compositor submap for cancel)
-                                            if let Some(cmd) = &self.config.output.pre_recording_command {
-                                                if let Err(e) = output::run_hook(cmd, "pre_recording").await {
-                                                    tracing::warn!("{}", e);
-                                                }
-                                            }
                                         }
                                         Err(()) => {
                                             // Helper already logged and played the error sound.
@@ -4725,14 +4728,6 @@ impl Daemon {
                                         };
                                     }
                                     self.update_state("recording");
-                                    self.play_feedback(SoundEvent::RecordingStart);
-
-                                    // Run pre-recording hook (e.g., enter compositor submap for cancel)
-                                    if let Some(cmd) = &self.config.output.pre_recording_command {
-                                        if let Err(e) = output::run_hook(cmd, "pre_recording").await {
-                                            tracing::warn!("{}", e);
-                                        }
-                                    }
                                 }
                                 Err(()) => {
                                     // Helper already logged and played the error sound.

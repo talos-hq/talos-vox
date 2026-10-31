@@ -58,6 +58,21 @@ impl AudioFeedback {
         })
     }
 
+    /// Finish the start cue before the caller opens microphone capture.
+    pub fn play_start_and_wait(&self) -> Result<(), String> {
+        if self.theme.start.is_empty() {
+            return Ok(());
+        }
+        let cursor = Cursor::new(self.theme.start.clone());
+        let source = Decoder::new(cursor)
+            .map_err(|e| format!("Failed to decode start cue: {}", e))?
+            .amplify(self.config.volume);
+        let player = rodio::Player::connect_new(self.sink.mixer());
+        player.append(source);
+        player.sleep_until_end();
+        Ok(())
+    }
+
     /// Play a sound for the given event
     pub fn play(&self, event: SoundEvent) {
         let sound_data = match event {
