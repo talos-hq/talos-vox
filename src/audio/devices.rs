@@ -26,7 +26,7 @@ pub fn enumerate_input_devices() -> Vec<String> {
     let host = cpal::default_host();
     if let Ok(devices) = host.input_devices() {
         for d in devices {
-            if let Ok(name) = d.name() {
+            if let Ok(name) = d.description().map(|x| x.name().to_string()) {
                 if name != "default" && !out.contains(&name) {
                     out.push(name);
                 }

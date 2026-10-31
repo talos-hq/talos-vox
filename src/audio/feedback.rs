@@ -4,7 +4,7 @@
 //! Supports multiple sound themes and custom sound files.
 
 use crate::config::AudioFeedbackConfig;
-use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
+use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Source};
 use std::io::Cursor;
 use std::path::PathBuf;
 
@@ -25,8 +25,7 @@ pub enum SoundEvent {
 
 /// Audio feedback player
 pub struct AudioFeedback {
-    _stream: OutputStream,
-    stream_handle: OutputStreamHandle,
+    sink: MixerDeviceSink,
     config: AudioFeedbackConfig,
     theme: SoundTheme,
 }
@@ -47,14 +46,13 @@ impl AudioFeedback {
             return Err("Audio feedback is disabled".to_string());
         }
 
-        let (stream, stream_handle) = OutputStream::try_default()
+        let sink = DeviceSinkBuilder::open_default_sink()
             .map_err(|e| format!("Failed to open audio output: {}", e))?;
 
         let theme = load_theme(&config.theme)?;
 
         Ok(Self {
-            _stream: stream,
-            stream_handle,
+            sink,
             config: config.clone(),
             theme,
         })
@@ -86,11 +84,8 @@ impl AudioFeedback {
         // Apply volume control
         let source = source.amplify(self.config.volume);
 
-        let sink = Sink::try_new(&self.stream_handle)
-            .map_err(|e| format!("Failed to create audio sink: {}", e))?;
-
-        sink.append(source);
-        sink.detach(); // Let it play in the background
+        // The mixer plays it in the background for as long as the sink lives.
+        self.sink.mixer().add(source);
 
         Ok(())
     }
