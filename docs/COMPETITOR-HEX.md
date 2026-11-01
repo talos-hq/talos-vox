@@ -4,8 +4,8 @@
 **Trigger:** https://x.com/opencode/status/2116555630236577819 — "no matter what agent you're
 using, your voice is the best way to talk to them … and hex is the best way to use your voice:
 fast, runs locally, works on mac, windows, linux. stable release now available: https://anoma.ly/hex"
-**Subject:** Hex 2.3.1 (app release) / `anomalyco/hex` `main` (Cargo version 3.1.0), MIT, Rust.
-Anomaly is also the company behind OpenCode.
+**Subject:** Hex 2.3.1 (app release) / `anomalyco/hex` `main` (Cargo version 3.1.2 as of 2026-11-01), MIT, Rust.
+Anomaly is also the company behind OpenCode. Its desktop UI is Anomaly's Rust/wgpu toolkit **rune**, not Qt — relevant to `HEX-ABSORB-PLAN.md` §3.
 **Purpose:** Decide whether Hex has capabilities talos-vox needs, and what (if anything) is worth
 copying. Question being answered: *"do they have certain things that we need?"*
 
@@ -33,8 +33,10 @@ measurements. Anything measured here is marked as such.
   (`npx skills add anomalyco/hex --skill hex-personal-commands`).
 - **Annotate** — screen recording + on-screen ink + speech transcript, handed to a coding agent
   (macOS + Linux, not Windows). `hex annotate|show|send` from the CLI.
-- **`hex mcp`** — Hex itself is an MCP server (rmcp, stdio). This is the interesting one for us:
-  the dictation app exposes itself as a tool to agents rather than only being an agent accessory.
+- **`hex mcp`** — Hex is an MCP server (rmcp, stdio) exposing **meetings**: list/search/notes
+  (`src/meeting/mcp.rs`), *not* live dictation. Still the interesting shape — the app presents
+  itself to agents over a standard protocol — but the tool surface is narrower than "dictate via
+  MCP". Corrected 2026-11-01 after reading the source (see `HEX-ABSORB-PLAN.md` §4.2).
 - **Local API** — a small local HTTP surface (e.g. `/profile/vitals`) and a published TypeScript SDK.
 - **History** — retained pasted transcripts, 7-day default retention, entry/byte caps, "Keep: Off".
 - **Distribution** — signed/notarized DMG, Authenticode (Azure Artifact Signing), Homebrew cask,
@@ -83,7 +85,8 @@ product is a beta with a narrower surface than voxtype's everyday path.
 1. **Per-app / per-context Modes with LLM rewrite.** We have global `[text].replacements`, spoken
    punctuation, and one global `[output.post_process].command`. Hex routes by foreground app
    (and website) and can apply a different model, corrections, and rewrite policy per context.
-2. **MCP server (`hex mcp`).** Dictation as a *tool for agents*. Nothing in voxtype exposes that.
+2. **Agent-facing MCP server (`hex mcp`).** Agent tooling over a standard protocol — meetings only
+   today, but the shape is what matters. Nothing in voxtype exposes that.
 3. **History with retention controls + "paste last".** We keep nothing; Hex gives a bounded,
    configurable recall surface plus a one-chord re-paste.
 4. **Signed installers + in-app updater + enterprise disable policy.** We have signed release
@@ -134,7 +137,7 @@ us — the MCP surface will.
 
 - Tweet: https://x.com/opencode/status/2116555630236577819 (2026-10-31 15:39 UTC)
 - Product page / downloads: https://anoma.ly/hex/
-- Repo + README: https://github.com/anomalyco/hex (MIT) — `Cargo.toml` (version 3.1.0)
+- Repo + README: https://github.com/anomalyco/hex (MIT) — `Cargo.toml` (version 3.1.2)
 - Linux beta notes: https://github.com/anomalyco/hex/blob/main/docs/linux.md
 - Windows beta notes: https://github.com/anomalyco/hex/blob/main/docs/windows.md
 - vendored engine fork: https://github.com/anomalyco/transcribe.cpp
