@@ -81,6 +81,7 @@ pub mod error;
 pub mod hotkey;
 #[cfg(target_os = "macos")]
 pub mod hotkey_macos;
+pub mod local_ipc;
 pub mod meeting;
 #[cfg(target_os = "macos")]
 pub mod menubar;

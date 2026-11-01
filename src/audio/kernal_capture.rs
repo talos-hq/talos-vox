@@ -48,7 +48,10 @@ impl AudioCapture for KernalCapture {
             .await
             .map_err(|e| hal_error(e, &self.device))?;
         let (tx, rx) = mpsc::channel(256);
-        self.recorded.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        self.recorded
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
         self.drained = 0;
         let recorded = Arc::clone(&self.recorded);
         let max_samples = self.max_samples;

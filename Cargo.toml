@@ -13,7 +13,7 @@ keywords = ["voice", "speech", "whisper", "wayland", "linux"]
 categories = ["multimedia::audio", "accessibility"]
 
 [dependencies]
-kernal-api = { git = "https://github.com/forge-ci/kernal-api", branch = "main", features = ["audio-capture"], optional = true }
+kernal-api = { git = "https://github.com/forge-ci/kernal-api", branch = "main", features = ["audio-capture", "ipc-async", "fs"], optional = true }
 # Async runtime
 tokio = { version = "1", features = ["full", "signal", "sync", "time", "process", "io-util"] }
 

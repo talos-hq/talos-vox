@@ -24,11 +24,61 @@ use crate::output::TextOutput;
 use crate::state::{ChunkResult, State};
 use crate::text::TextProcessor;
 use crate::transcribe::{StreamHandle, StreamingEvent, Transcriber};
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+use host_stubs::HotkeyEvent;
+#[cfg(not(unix))]
+use host_stubs::{signal, SignalKind};
 use pidlock::Pidlock;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+#[cfg(unix)]
 use tokio::signal::unix::{signal, SignalKind};
+
+/// Stand-ins for hosts without Unix control signals or a built-in hotkey
+/// backend. There the daemon stops on Ctrl+C and is driven by `record`
+/// commands, so these sources never fire.
+#[cfg(not(unix))]
+mod host_stubs {
+    pub struct SignalKind;
+
+    impl SignalKind {
+        pub fn user_defined1() -> Self {
+            Self
+        }
+        pub fn user_defined2() -> Self {
+            Self
+        }
+        pub fn terminate() -> Self {
+            Self
+        }
+    }
+
+    pub struct Signal;
+
+    impl Signal {
+        pub async fn recv(&mut self) -> Option<()> {
+            std::future::pending().await
+        }
+    }
+
+    pub fn signal(_kind: SignalKind) -> std::io::Result<Signal> {
+        Ok(Signal)
+    }
+
+    /// Mirrors the Linux and macOS listener events so the daemon's match
+    /// arms stay platform-agnostic. No listener exists to construct them.
+    #[allow(dead_code)]
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum HotkeyEvent {
+        Pressed {
+            model_override: Option<String>,
+            profile_override: Option<String>,
+        },
+        Released,
+        Cancel,
+    }
+}
 
 /// Send a desktop notification with optional engine icon
 async fn send_notification(
@@ -85,6 +135,10 @@ async fn send_notification_with_lifetime(
         let engine_for_icon = if show_engine_icon { Some(engine) } else { None };
         notification::send_with_engine(&title, body, engine_for_icon).await;
     }
+
+    // No desktop notification backend on other hosts yet.
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let _ = (title, body, show_engine_icon, engine, urgency, lifetime);
 }
 
 /// Take down the recording banner now that the recording has ended.
@@ -1336,10 +1390,8 @@ impl Daemon {
         // The marker survives the transcribing state and is cleared on the way
         // back to idle.
         match state_name {
-            "recording" | "streaming" => {
-                if read_bool_override("no_osd").unwrap_or(false) {
-                    set_osd_suppressed(true);
-                }
+            "recording" | "streaming" if read_bool_override("no_osd").unwrap_or(false) => {
+                set_osd_suppressed(true);
             }
             "idle" | "stopped" => set_osd_suppressed(false),
             _ => {}
@@ -3278,7 +3330,10 @@ impl Daemon {
 
                     // Skip if too short (likely accidental press)
                     if samples.len() < 8_000 {
-                        tracing::info!("Discarding recording shorter than 500 ms ({:.2}s)", audio_duration);
+                        tracing::info!(
+                            "Discarding recording shorter than 500 ms ({:.2}s)",
+                            audio_duration
+                        );
                         self.publish_empty_outcome();
                         self.reset_to_idle(state).await;
                         return false;
@@ -5926,6 +5981,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_stale_lockfile_cleanup() {
         with_test_runtime_dir(|dir| {
@@ -5943,6 +5999,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_stale_lockfile_not_cleaned_if_pid_running() {
         with_test_runtime_dir(|dir| {

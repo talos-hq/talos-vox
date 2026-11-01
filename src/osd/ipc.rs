@@ -17,7 +17,6 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use tokio::io::AsyncReadExt;
-use tokio::net::UnixStream;
 use tokio::time::sleep;
 
 use crate::audio::levels::{default_socket_path, AudioFrame, FRAME_BYTES, FRAME_HZ};
@@ -176,7 +175,7 @@ pub async fn run_one_connection<F>(socket_path: &Path, mut on_frame: F) -> Conne
 where
     F: FnMut(AudioFrame),
 {
-    let mut stream = match UnixStream::connect(socket_path).await {
+    let mut stream = match crate::local_ipc::connect(socket_path).await {
         Ok(s) => s,
         Err(e) => {
             tracing::debug!("Cannot connect to {:?}: {}", socket_path, e);
@@ -187,7 +186,7 @@ where
 
     let mut buf = [0u8; FRAME_BYTES];
     loop {
-        match stream.read_exact(&mut buf).await {
+        match AsyncReadExt::read_exact(&mut stream, &mut buf).await {
             Ok(_) => {
                 let frame = AudioFrame::from_bytes(&buf);
                 on_frame(frame);

@@ -50,10 +50,19 @@ pub fn read_pid() -> Option<i32> {
 
 /// Check whether `pid` corresponds to a live process. Uses signal 0
 /// (existence check) which works on Linux and macOS without side effects.
+#[cfg(unix)]
 pub fn is_running(pid: i32) -> bool {
     // SAFETY: libc::kill with signal 0 only probes for the process; it
     // does not deliver a signal, so there's no observable side effect.
     unsafe { libc::kill(pid, 0) == 0 }
+}
+
+/// Check whether `pid` corresponds to a live process.
+#[cfg(not(unix))]
+pub fn is_running(pid: i32) -> bool {
+    kernal_api::platform::host_processes::snapshot()
+        .iter()
+        .any(|process| i64::from(process.pid()) == i64::from(pid) && process.running())
 }
 
 /// Read the daemon's PID and confirm the process is alive. Returns

@@ -161,6 +161,7 @@ fn pick_best_backend(
 /// Returns Some(12), Some(13), or None if CUDA isn't installed or the probe
 /// fails. Used by detect_best_parakeet_backend to pick between voxtype-onnx-cuda-12
 /// and voxtype-onnx-cuda-13 based on what the host can actually run.
+#[cfg(unix)]
 pub fn detect_cuda_runtime_major() -> Option<i32> {
     use std::ffi::CString;
     let candidates = ["libcudart.so", "libcudart.so.13", "libcudart.so.12"];
@@ -191,6 +192,12 @@ pub fn detect_cuda_runtime_major() -> Option<i32> {
         return None;
     }
     Some(version / 1000)
+}
+
+/// The CUDA probe dlopens `libcudart.so`; other hosts report no runtime.
+#[cfg(not(unix))]
+pub fn detect_cuda_runtime_major() -> Option<i32> {
+    None
 }
 
 /// Print the binary the running daemon executes, as `setup gpu --status`

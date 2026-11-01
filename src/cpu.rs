@@ -98,7 +98,7 @@ extern "C" fn sigill_handler(_sig: i32) {
         libc::write(
             libc::STDERR_FILENO,
             msg.as_ptr() as *const libc::c_void,
-            msg.len(),
+            msg.len() as _,
         );
         libc::_exit(1);
     }

@@ -18,8 +18,8 @@
 //! This sets VK_LOADER_DRIVERS_SELECT internally to filter Vulkan ICDs.
 
 use super::binary::{install_active_binary, resolve_active_binary};
+use super::symlink;
 use std::fs;
-use std::os::unix::fs::symlink;
 use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -662,6 +662,7 @@ pub fn check_vulkan_runtime() -> bool {
     // runtime not found" on machines where Vulkan worked perfectly well
     // (#430). Guix, and anyone using a non-standard prefix or
     // LD_LIBRARY_PATH, had the same problem.
+    #[cfg(unix)]
     unsafe {
         let name = c"libvulkan.so.1";
         let handle = libc::dlopen(name.as_ptr(), libc::RTLD_LAZY);
@@ -1479,6 +1480,7 @@ mod tests {
     /// This machine has Vulkan, so the probe must find it; the value of the
     /// test is that it fails loudly if the probe regresses to path guessing
     /// on a system where the paths happen to be absent.
+    #[cfg(unix)]
     #[test]
     fn vulkan_detection_matches_the_loader() {
         let via_loader = unsafe {

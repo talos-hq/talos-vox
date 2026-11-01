@@ -34,8 +34,21 @@ pub mod variant_check;
 pub mod waybar;
 
 use crate::config::Config;
+use std::path::Path;
 use std::process::Stdio;
 use tokio::process::Command;
+
+/// Create a symbolic link at `link` pointing to the file `target`.
+#[cfg(unix)]
+pub(crate) fn symlink(target: impl AsRef<Path>, link: impl AsRef<Path>) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+/// Create a symbolic link at `link` pointing to the file `target`.
+#[cfg(not(unix))]
+pub(crate) fn symlink(target: impl AsRef<Path>, link: impl AsRef<Path>) -> std::io::Result<()> {
+    kernal_api::platform::fs::symlink_file(target.as_ref(), link.as_ref())
+}
 
 /// Display server type
 #[derive(Debug, Clone, Copy, PartialEq)]

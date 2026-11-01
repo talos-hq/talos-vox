@@ -73,7 +73,10 @@ fn find_audio_device(host: &cpal::Host, device_name: &str) -> Result<cpal::Devic
         .collect();
 
     // Collect device names for error message
-    let device_names: Vec<String> = devices.iter().filter_map(|d| d.description().map(|x| x.name().to_string()).ok()).collect();
+    let device_names: Vec<String> = devices
+        .iter()
+        .filter_map(|d| d.description().map(|x| x.name().to_string()).ok())
+        .collect();
 
     let search_lower = device_name.to_lowercase();
 
@@ -85,7 +88,12 @@ fn find_audio_device(host: &cpal::Host, device_name: &str) -> Result<cpal::Devic
                 return host
                     .input_devices()
                     .map_err(|e| AudioError::Connection(e.to_string()))?
-                    .find(|d| d.description().map(|x| x.name().to_string()).map(|n| n == device_name).unwrap_or(false))
+                    .find(|d| {
+                        d.description()
+                            .map(|x| x.name().to_string())
+                            .map(|n| n == device_name)
+                            .unwrap_or(false)
+                    })
                     .ok_or_else(|| AudioError::DeviceNotFound(device_name.to_string()));
             }
         }
@@ -104,7 +112,12 @@ fn find_audio_device(host: &cpal::Host, device_name: &str) -> Result<cpal::Devic
                 return host
                     .input_devices()
                     .map_err(|e| AudioError::Connection(e.to_string()))?
-                    .find(|d| d.description().map(|x| x.name().to_string()).map(|n| n == matched_name).unwrap_or(false))
+                    .find(|d| {
+                        d.description()
+                            .map(|x| x.name().to_string())
+                            .map(|n| n == matched_name)
+                            .unwrap_or(false)
+                    })
                     .ok_or_else(|| AudioError::DeviceNotFound(device_name.to_string()));
             }
         }
@@ -123,7 +136,12 @@ fn find_audio_device(host: &cpal::Host, device_name: &str) -> Result<cpal::Devic
                 return host
                     .input_devices()
                     .map_err(|e| AudioError::Connection(e.to_string()))?
-                    .find(|d| d.description().map(|x| x.name().to_string()).map(|n| n == matched_name).unwrap_or(false))
+                    .find(|d| {
+                        d.description()
+                            .map(|x| x.name().to_string())
+                            .map(|n| n == matched_name)
+                            .unwrap_or(false)
+                    })
                     .ok_or_else(|| AudioError::DeviceNotFound(device_name.to_string()));
             }
         }
@@ -164,7 +182,10 @@ impl AudioCapture for CpalCapture {
             find_audio_device(&host, &self.config.device)?
         };
 
-        let device_name = device.description().map(|x| x.name().to_string()).unwrap_or_else(|_| "unknown".to_string());
+        let device_name = device
+            .description()
+            .map(|x| x.name().to_string())
+            .unwrap_or_else(|_| "unknown".to_string());
         tracing::info!("Using audio device: {}", device_name);
 
         // Get supported config
@@ -430,7 +451,7 @@ where
 
     let stream = device
         .build_input_stream(
-            config.clone(),
+            *config,
             move |data: &[T], _: &cpal::InputCallbackInfo| {
                 // Convert to f32 and mix to mono
                 let mono_f32: Vec<f32> = data
