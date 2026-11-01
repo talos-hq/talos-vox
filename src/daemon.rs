@@ -27,13 +27,45 @@ use crate::transcribe::{StreamHandle, StreamingEvent, Transcriber};
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 use host_stubs::HotkeyEvent;
 #[cfg(not(unix))]
+use host_stubs::Signal;
+#[cfg(not(unix))]
 use host_stubs::{signal, SignalKind};
 use pidlock::Pidlock;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 #[cfg(unix)]
-use tokio::signal::unix::{signal, SignalKind};
+use tokio::signal::unix::{signal, Signal, SignalKind};
+
+/// A start or stop trigger: the Unix signal, or the same request arriving
+/// over the control channel. A closed channel never fires.
+struct Trigger {
+    signal: Signal,
+    control: tokio::sync::mpsc::UnboundedReceiver<()>,
+    control_open: bool,
+}
+
+impl Trigger {
+    fn new(signal: Signal, control: tokio::sync::mpsc::UnboundedReceiver<()>) -> Self {
+        Self {
+            signal,
+            control,
+            control_open: true,
+        }
+    }
+
+    async fn recv(&mut self) -> Option<()> {
+        loop {
+            tokio::select! {
+                fired = self.signal.recv() => return fired,
+                request = self.control.recv(), if self.control_open => match request {
+                    Some(()) => return Some(()),
+                    None => self.control_open = false,
+                },
+            }
+        }
+    }
+}
 
 /// Stand-ins for hosts without Unix control signals or a built-in hotkey
 /// backend. There the daemon stops on Ctrl+C and is driven by `record`
@@ -1085,6 +1117,8 @@ type TranscriberLoadTask = tokio::task::JoinHandle<
 /// Main daemon that orchestrates all components
 pub struct Daemon {
     config: Config,
+    /// Daemon state as reported over the control channel.
+    control_state: crate::control::SharedState,
     /// When the `record start` being handled was issued, while that start
     /// runs. Lets a cancel racing the start signal survive the #606
     /// stale-cancel sweep.
@@ -1263,6 +1297,7 @@ impl Daemon {
             config,
             config_path,
             state_file_path,
+            control_state: std::sync::Arc::new(std::sync::Mutex::new("idle".to_string())),
             pid_file_path: None,
             audio_feedback,
             text_processor,
@@ -1380,6 +1415,9 @@ impl Daemon {
 
     /// Update the state file if configured
     fn update_state(&self, state_name: &str) {
+        if let Ok(mut state) = self.control_state.lock() {
+            *state = state_name.to_string();
+        }
         if let Some(ref path) = self.state_file_path {
             write_state_file(path, state_name);
         }
@@ -3886,15 +3924,37 @@ impl Daemon {
         self.pid_file_path = write_pid_file();
 
         // Set up signal handlers for external control
-        let mut sigusr1 = signal(SignalKind::user_defined1()).map_err(|e| {
+        let sigusr1 = signal(SignalKind::user_defined1()).map_err(|e| {
             crate::error::VoxtypeError::Config(format!("Failed to set up SIGUSR1 handler: {}", e))
         })?;
-        let mut sigusr2 = signal(SignalKind::user_defined2()).map_err(|e| {
+        let sigusr2 = signal(SignalKind::user_defined2()).map_err(|e| {
             crate::error::VoxtypeError::Config(format!("Failed to set up SIGUSR2 handler: {}", e))
         })?;
         let mut sigterm = signal(SignalKind::terminate()).map_err(|e| {
             crate::error::VoxtypeError::Config(format!("Failed to set up SIGTERM handler: {}", e))
         })?;
+
+        // The control channel feeds the same start/stop arms as the signals.
+        let (start_tx, start_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (stop_tx, stop_rx) = tokio::sync::mpsc::unbounded_channel();
+        match crate::control::serve(&crate::control::socket_path(), self.control_state.clone()) {
+            Ok(mut commands) => {
+                tokio::spawn(async move {
+                    while let Some(command) = commands.recv().await {
+                        let routed = match command {
+                            crate::control::Command::Start => start_tx.send(()),
+                            crate::control::Command::Stop => stop_tx.send(()),
+                        };
+                        if routed.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            Err(e) => tracing::warn!("Control socket unavailable: {}", e),
+        }
+        let mut sigusr1 = Trigger::new(sigusr1, start_rx);
+        let mut sigusr2 = Trigger::new(sigusr2, stop_rx);
 
         // Ensure required directories exist
         Config::ensure_directories().map_err(|e| {

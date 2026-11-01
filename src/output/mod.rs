@@ -22,6 +22,8 @@
 #[cfg(target_os = "macos")]
 pub mod cgevent;
 pub mod clipboard;
+#[cfg(all(feature = "kernal-api", not(target_os = "linux")))]
+pub mod desktop_input;
 pub mod dotool;
 pub mod eitype;
 // modifier_guard is evdev-based; macOS has its own osascript modifier handling.
@@ -323,6 +325,14 @@ pub fn create_output_chain_with_override(
 
     match config.mode {
         crate::config::OutputMode::Type => {
+            // Windows and macOS type through kernal-api first; the
+            // platform's own drivers stay behind it as fallbacks.
+            #[cfg(all(feature = "kernal-api", not(target_os = "linux")))]
+            chain.push(Box::new(desktop_input::DesktopInputOutput::new(
+                config.auto_submit,
+                config.append_text.clone(),
+            )));
+
             #[cfg(target_os = "macos")]
             {
                 // macOS: Primary - CGEvent (native API, best performance)

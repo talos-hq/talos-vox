@@ -90,3 +90,77 @@ impl AudioCapture for KernalCapture {
         fresh
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn capture() -> KernalCapture {
+        KernalCapture::new(&AudioConfig::default()).unwrap()
+    }
+
+    #[test]
+    fn hal_errors_map_to_audio_errors() {
+        assert!(matches!(
+            hal_error(HalError::NoDevice, "mic"),
+            AudioError::DeviceNotFound(name) if name == "mic"
+        ));
+        assert!(matches!(
+            hal_error(HalError::Denied, "mic"),
+            AudioError::Connection(_)
+        ));
+        assert!(matches!(
+            hal_error(HalError::Unavailable, "mic"),
+            AudioError::Connection(_)
+        ));
+    }
+
+    #[test]
+    fn session_cap_is_sixteen_khz_times_max_duration() {
+        let config = AudioConfig::default();
+        let expected = config.max_duration_secs as usize * 16_000;
+        assert_eq!(capture().max_samples, expected);
+    }
+
+    #[tokio::test]
+    async fn get_samples_returns_only_fresh_samples() {
+        let mut capture = capture();
+        capture.recorded.lock().unwrap().extend([0.1, 0.2]);
+        assert_eq!(capture.get_samples().await, vec![0.1, 0.2]);
+        assert!(capture.get_samples().await.is_empty());
+        capture.recorded.lock().unwrap().push(0.3);
+        assert_eq!(capture.get_samples().await, vec![0.3]);
+    }
+
+    #[tokio::test]
+    async fn stop_without_samples_is_an_empty_recording() {
+        assert!(matches!(
+            capture().stop().await,
+            Err(AudioError::EmptyRecording)
+        ));
+    }
+
+    /// Opens and closes the real default input through the HAL. CI runners
+    /// often have no microphone, so a clean "no device" error passes too;
+    /// what must not happen is a hang or a panic.
+    #[tokio::test]
+    async fn default_device_opens_and_closes_or_reports_why_not() {
+        let mut capture = capture();
+        let started = tokio::time::timeout(Duration::from_secs(20), capture.start())
+            .await
+            .expect("opening the default input must not hang");
+        match started {
+            Ok(_rx) => {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                let stopped = tokio::time::timeout(Duration::from_secs(10), capture.stop())
+                    .await
+                    .expect("stopping capture must not hang");
+                assert!(matches!(stopped, Ok(_) | Err(AudioError::EmptyRecording)));
+            }
+            Err(e) => assert!(
+                matches!(e, AudioError::DeviceNotFound(_) | AudioError::Connection(_)),
+                "unexpected open error: {e}"
+            ),
+        }
+    }
+}

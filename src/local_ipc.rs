@@ -55,3 +55,18 @@ impl Listener {
 pub async fn connect(path: &Path) -> io::Result<Stream> {
     Stream::connect_within(&endpoint(path)?, std::time::Duration::from_secs(5)).await
 }
+
+/// Blocking client connection, for synchronous callers such as the CLI.
+#[cfg(unix)]
+pub fn connect_blocking(path: &Path) -> io::Result<std::os::unix::net::UnixStream> {
+    std::os::unix::net::UnixStream::connect(path)
+}
+
+/// Blocking client connection, for synchronous callers such as the CLI.
+#[cfg(not(unix))]
+pub fn connect_blocking(path: &Path) -> io::Result<kernal_api::platform::ipc::Stream> {
+    kernal_api::platform::ipc::Stream::connect_within(
+        &endpoint(path)?,
+        std::time::Duration::from_secs(5),
+    )
+}
