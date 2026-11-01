@@ -32,21 +32,9 @@ impl KernalCapture {
     }
 }
 
-fn hal_error(err: HalError, device: &str) -> AudioError {
-    match err {
-        HalError::NoDevice => AudioError::DeviceNotFound(device.to_owned()),
-        HalError::Denied => AudioError::Connection("microphone access denied".into()),
-        HalError::Unavailable => AudioError::Connection("microphone unavailable".into()),
-    }
-}
-
-#[async_trait::async_trait]
-impl AudioCapture for KernalCapture {
-    async fn start(&mut self) -> Result<mpsc::Receiver<Vec<f32>>, AudioError> {
-        // kernal-api opens the default input; named-device selection is a HAL follow-up.
-        let mut capture = Capture::open_default()
-            .await
-            .map_err(|e| hal_error(e, &self.device))?;
+impl KernalCapture {
+    /// Forward `capture`'s chunks into a fresh session until it stops or the cap is hit.
+    fn pump(&mut self, mut capture: Capture) -> mpsc::Receiver<Vec<f32>> {
         let (tx, rx) = mpsc::channel(256);
         self.recorded
             .lock()
@@ -67,7 +55,26 @@ impl AudioCapture for KernalCapture {
                 let _ = tx.try_send(chunk);
             }
         }));
-        Ok(rx)
+        rx
+    }
+}
+
+fn hal_error(err: HalError, device: &str) -> AudioError {
+    match err {
+        HalError::NoDevice => AudioError::DeviceNotFound(device.to_owned()),
+        HalError::Denied => AudioError::Connection("microphone access denied".into()),
+        HalError::Unavailable => AudioError::Connection("microphone unavailable".into()),
+    }
+}
+
+#[async_trait::async_trait]
+impl AudioCapture for KernalCapture {
+    async fn start(&mut self) -> Result<mpsc::Receiver<Vec<f32>>, AudioError> {
+        // kernal-api opens the default input; named-device selection is a HAL follow-up.
+        let capture = Capture::open_default()
+            .await
+            .map_err(|e| hal_error(e, &self.device))?;
+        Ok(self.pump(capture))
     }
 
     async fn stop(&mut self) -> Result<Vec<f32>, AudioError> {
@@ -97,6 +104,29 @@ mod tests {
 
     fn capture() -> KernalCapture {
         KernalCapture::new(&AudioConfig::default()).unwrap()
+    }
+
+    /// The whole pump path runs without hardware: a synthetic 16 kHz tone
+    /// arrives on the session channel and comes back from `stop` intact.
+    #[tokio::test]
+    async fn a_synthetic_source_is_recorded_end_to_end() {
+        use kernal_api::audio_capture::TestSource;
+        let mut session = capture();
+        let source = TestSource::sine(440.0, 0.5, Duration::from_millis(500));
+        let expected = source.samples.clone();
+        let mut rx = session.pump(Capture::open_test_source(source).unwrap());
+        let mut streamed = 0;
+        while let Some(chunk) = rx.recv().await {
+            streamed += chunk.len();
+        }
+        assert_eq!(streamed, expected.len());
+        assert_eq!(session.get_samples().await.len(), expected.len());
+        let samples = session.stop().await.unwrap();
+        assert_eq!(samples.len(), expected.len());
+        assert!(samples
+            .iter()
+            .zip(&expected)
+            .all(|(got, want)| (got - want).abs() < 1e-6));
     }
 
     #[test]

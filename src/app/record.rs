@@ -475,8 +475,23 @@ fn deliver(pid: i32, start: bool) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Hosts without Unix signals reach the daemon over its control channel.
-#[cfg(not(unix))]
+/// Other hosts send kernal-api's equivalent control signals to the daemon PID.
+#[cfg(all(not(unix), feature = "kernal-api"))]
+fn deliver(pid: i32, start: bool) -> std::io::Result<()> {
+    use kernal_api::control_signal::{send, ControlSignal};
+    let pid = u32::try_from(pid).map_err(|_| std::io::ErrorKind::InvalidInput)?;
+    send(
+        pid,
+        if start {
+            ControlSignal::User1
+        } else {
+            ControlSignal::User2
+        },
+    )
+}
+
+/// Without kernal-api, other hosts reach the daemon over its control channel.
+#[cfg(all(not(unix), not(feature = "kernal-api")))]
 fn deliver(_pid: i32, start: bool) -> std::io::Result<()> {
     let reply = voxtype::control::request(
         &voxtype::control::socket_path(),

@@ -38,6 +38,35 @@ use std::path::Path;
 use std::process::Stdio;
 use tokio::process::Command;
 
+/// Whether this process's dynamic loader can open the library `name`.
+#[cfg(feature = "kernal-api")]
+pub(crate) fn library_loads(name: &str) -> bool {
+    kernal_api::platform::dylib::Library::open(name).is_ok()
+}
+
+/// Whether this process's dynamic loader can open the library `name`.
+#[cfg(all(unix, not(feature = "kernal-api")))]
+pub(crate) fn library_loads(name: &str) -> bool {
+    let Ok(name) = std::ffi::CString::new(name) else {
+        return false;
+    };
+    // SAFETY: a NUL-terminated name; the handle is closed before returning.
+    unsafe {
+        let handle = libc::dlopen(name.as_ptr(), libc::RTLD_LAZY);
+        if handle.is_null() {
+            return false;
+        }
+        libc::dlclose(handle);
+    }
+    true
+}
+
+/// Without kernal-api a non-Unix host has no loader probe.
+#[cfg(all(not(unix), not(feature = "kernal-api")))]
+pub(crate) fn library_loads(_name: &str) -> bool {
+    false
+}
+
 /// Create a symbolic link at `link` pointing to the file `target`.
 #[cfg(unix)]
 pub(crate) fn symlink(target: impl AsRef<Path>, link: impl AsRef<Path>) -> std::io::Result<()> {

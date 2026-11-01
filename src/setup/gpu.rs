@@ -652,6 +652,12 @@ pub fn apply_gpu_selection() -> Option<GpuVendor> {
     }
 }
 
+/// The Vulkan loader's library name on this host.
+#[cfg(windows)]
+const VULKAN_LIBRARY: &str = "vulkan-1.dll";
+#[cfg(not(windows))]
+const VULKAN_LIBRARY: &str = "libvulkan.so.1";
+
 /// Check if Vulkan runtime is available
 pub fn check_vulkan_runtime() -> bool {
     // Ask the dynamic loader, which answers the question we actually care
@@ -662,14 +668,8 @@ pub fn check_vulkan_runtime() -> bool {
     // runtime not found" on machines where Vulkan worked perfectly well
     // (#430). Guix, and anyone using a non-standard prefix or
     // LD_LIBRARY_PATH, had the same problem.
-    #[cfg(unix)]
-    unsafe {
-        let name = c"libvulkan.so.1";
-        let handle = libc::dlopen(name.as_ptr(), libc::RTLD_LAZY);
-        if !handle.is_null() {
-            libc::dlclose(handle);
-            return true;
-        }
+    if super::library_loads(VULKAN_LIBRARY) {
+        return true;
     }
 
     // Fall back to the path check. dlopen can fail in a sandbox that permits
@@ -1480,19 +1480,9 @@ mod tests {
     /// This machine has Vulkan, so the probe must find it; the value of the
     /// test is that it fails loudly if the probe regresses to path guessing
     /// on a system where the paths happen to be absent.
-    #[cfg(unix)]
     #[test]
     fn vulkan_detection_matches_the_loader() {
-        let via_loader = unsafe {
-            let name = c"libvulkan.so.1";
-            let h = libc::dlopen(name.as_ptr(), libc::RTLD_LAZY);
-            let found = !h.is_null();
-            if found {
-                libc::dlclose(h);
-            }
-            found
-        };
-        if via_loader {
+        if super::super::library_loads(VULKAN_LIBRARY) {
             assert!(
                 check_vulkan_runtime(),
                 "the loader can open libvulkan but check_vulkan_runtime says otherwise"

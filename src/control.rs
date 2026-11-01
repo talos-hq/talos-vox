@@ -1,8 +1,9 @@
 //! Daemon control channel: `record start/stop` and status over local IPC.
 //!
-//! Unix CLIs keep signalling the daemon (SIGUSR1/SIGUSR2); this channel is
-//! how other hosts, which have no such signals, reach it, and it answers
-//! the same requests on every host. The protocol is one request line
+//! `record start/stop` signals the daemon (SIGUSR1/SIGUSR2 on Unix,
+//! kernal-api control signals elsewhere); this channel answers the same
+//! requests plus `status` on every host, for clients that want a reply,
+//! and is the route on non-Unix builds without kernal-api. The protocol is one request line
 //! (`start`, `stop` or `status`) and one JSON reply line:
 //! `{"ok": true, "state": "<daemon state>"}`, or
 //! `{"ok": false, "error": "<reason>"}` for an unknown request.

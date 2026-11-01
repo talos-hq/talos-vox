@@ -67,13 +67,82 @@ impl Trigger {
     }
 }
 
-/// Stand-ins for hosts without Unix control signals or a built-in hotkey
-/// backend. There the daemon stops on Ctrl+C and is driven by `record`
-/// commands, so these sources never fire.
+/// Hosts without Unix control signals or a built-in hotkey backend.
+///
+/// With kernal-api, `signal` mirrors `tokio::signal::unix::signal` on top of
+/// kernal-api's control signals (named events, console close/shutdown), so
+/// `record start/stop` reaches the daemon by PID as it does on Unix.
+/// Without it these sources never fire and the daemon is driven over the
+/// control channel and stopped with Ctrl+C.
 #[cfg(not(unix))]
 mod host_stubs {
+    #[cfg(feature = "kernal-api")]
+    pub use control_signals::{signal, Signal, SignalKind};
+
+    #[cfg(feature = "kernal-api")]
+    mod control_signals {
+        use kernal_api::control_signal::{ControlReceiver, ControlSignal};
+        use std::sync::Mutex;
+        use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+
+        pub struct SignalKind(ControlSignal);
+
+        impl SignalKind {
+            pub fn user_defined1() -> Self {
+                Self(ControlSignal::User1)
+            }
+            pub fn user_defined2() -> Self {
+                Self(ControlSignal::User2)
+            }
+            pub fn terminate() -> Self {
+                Self(ControlSignal::Terminate)
+            }
+        }
+
+        pub struct Signal(UnboundedReceiver<()>);
+
+        impl Signal {
+            pub async fn recv(&mut self) -> Option<()> {
+                self.0.recv().await
+            }
+        }
+
+        type Routes = Vec<(ControlSignal, UnboundedSender<()>)>;
+
+        /// One process-wide receiver fans out to every `signal` subscriber.
+        static ROUTES: Mutex<Option<Routes>> = Mutex::new(None);
+
+        fn route(signal: ControlSignal) {
+            let routes = ROUTES.lock().unwrap_or_else(|e| e.into_inner());
+            for (kind, sender) in routes.iter().flatten() {
+                if *kind == signal {
+                    let _ = sender.send(());
+                }
+            }
+        }
+
+        /// Subscribe to `kind`; must run inside the Tokio runtime.
+        pub fn signal(kind: SignalKind) -> std::io::Result<Signal> {
+            let mut routes = ROUTES.lock().unwrap_or_else(|e| e.into_inner());
+            if routes.is_none() {
+                let mut receiver = ControlReceiver::listen()?;
+                tokio::spawn(async move {
+                    while let Some(signal) = receiver.recv().await {
+                        route(signal);
+                    }
+                });
+                *routes = Some(Vec::new());
+            }
+            let (sender, receiver) = unbounded_channel();
+            routes.get_or_insert_with(Vec::new).push((kind.0, sender));
+            Ok(Signal(receiver))
+        }
+    }
+
+    #[cfg(not(feature = "kernal-api"))]
     pub struct SignalKind;
 
+    #[cfg(not(feature = "kernal-api"))]
     impl SignalKind {
         pub fn user_defined1() -> Self {
             Self
@@ -86,14 +155,17 @@ mod host_stubs {
         }
     }
 
+    #[cfg(not(feature = "kernal-api"))]
     pub struct Signal;
 
+    #[cfg(not(feature = "kernal-api"))]
     impl Signal {
         pub async fn recv(&mut self) -> Option<()> {
             std::future::pending().await
         }
     }
 
+    #[cfg(not(feature = "kernal-api"))]
     pub fn signal(_kind: SignalKind) -> std::io::Result<Signal> {
         Ok(Signal)
     }
