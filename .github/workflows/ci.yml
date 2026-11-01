@@ -64,6 +64,24 @@ jobs:
       - name: cargo test
         run: cargo test
 
+  # Portability probe for the kernal-api rewrite: audio capture already goes through
+  # kernal-api on every OS; this shows what else still blocks a Windows/macOS build.
+  # Not in ci-success until it is green.
+  kernal-api:
+    name: kernal-api (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: zackees/setup-soldr@v0
+      - name: check with kernal-api audio
+        run: soldr cargo check --features kernal-api --lib --keep-going
+      - name: kernal-api capture tests
+        run: soldr cargo test --features kernal-api --lib audio::kernal_capture
+
   # Aggregator job — branch protection only needs to require `ci-success`.
   # Adding/removing parallel checks above just updates the `needs:` list;
   # the protection rule never needs to be touched.
