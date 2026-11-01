@@ -47,6 +47,10 @@ pub fn input_devices() -> Vec<InputDevice> {
         .collect()
 }
 
+/// fd 2 is stderr under both the Unix libc and the MSVC CRT; the MSVC libc
+/// bindings lack `STDERR_FILENO`.
+const STDERR_FD: libc::c_int = 2;
+
 /// RAII guard that redirects fd 2 (stderr) to /dev/null on construction and
 /// restores the original fd on drop.
 struct SilencedStderr {
@@ -59,12 +63,12 @@ impl SilencedStderr {
         if null_fd < 0 {
             return Self { saved_fd: None };
         }
-        let saved = unsafe { libc::dup(libc::STDERR_FILENO) };
+        let saved = unsafe { libc::dup(STDERR_FD) };
         if saved < 0 {
             unsafe { libc::close(null_fd) };
             return Self { saved_fd: None };
         }
-        unsafe { libc::dup2(null_fd, libc::STDERR_FILENO) };
+        unsafe { libc::dup2(null_fd, STDERR_FD) };
         unsafe { libc::close(null_fd) };
         Self {
             saved_fd: Some(saved),
@@ -76,7 +80,7 @@ impl Drop for SilencedStderr {
     fn drop(&mut self) {
         if let Some(saved) = self.saved_fd.take() {
             unsafe {
-                libc::dup2(saved, libc::STDERR_FILENO);
+                libc::dup2(saved, STDERR_FD);
                 libc::close(saved);
             }
         }

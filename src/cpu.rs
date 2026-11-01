@@ -59,6 +59,10 @@ pub fn install_sigill_handler() {
     }
 }
 
+/// fd 2 is stderr under both the Unix libc and the MSVC CRT; the MSVC libc
+/// bindings lack `STDERR_FILENO`.
+const STDERR_FD: libc::c_int = 2;
+
 extern "C" fn sigill_handler(_sig: i32) {
     // SAFETY: We can only use async-signal-safe functions here.
     // write() to stderr is safe, println! is not.
@@ -96,7 +100,7 @@ extern "C" fn sigill_handler(_sig: i32) {
 
     unsafe {
         libc::write(
-            libc::STDERR_FILENO,
+            STDERR_FD,
             msg.as_ptr() as *const libc::c_void,
             msg.len() as _,
         );
