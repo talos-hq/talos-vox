@@ -48,8 +48,16 @@ pub fn read_pid() -> Option<i32> {
     (pid > 1).then_some(pid)
 }
 
+/// Check whether `pid` corresponds to a live process, through kernal-api's
+/// one-shot probe (pidfd / `kill(pid, 0)` on Unix, `OpenProcess` on Windows).
+#[cfg(feature = "kernal-api")]
+pub fn is_running(pid: i32) -> bool {
+    u32::try_from(pid).is_ok_and(kernal_api::platform::process::is_alive)
+}
+
 /// Check whether `pid` corresponds to a live process. Uses signal 0
 /// (existence check) which works on Linux and macOS without side effects.
+#[cfg(all(unix, not(feature = "kernal-api")))]
 pub fn is_running(pid: i32) -> bool {
     // SAFETY: libc::kill with signal 0 only probes for the process; it
     // does not deliver a signal, so there's no observable side effect.

@@ -9,6 +9,8 @@ pub mod dual_capture;
 #[cfg(feature = "onnx-common")]
 pub mod enhance;
 pub mod feedback;
+#[cfg(feature = "kernal-api")]
+pub mod kernal_capture;
 pub mod levels;
 pub mod media;
 pub mod resampler;
@@ -37,5 +39,8 @@ pub trait AudioCapture: Send + Sync {
 
 /// Factory function to create audio capture
 pub fn create_capture(config: &AudioConfig) -> Result<Box<dyn AudioCapture>, AudioError> {
+    #[cfg(feature = "kernal-api")]
+    return Ok(Box::new(kernal_capture::KernalCapture::new(config)?));
+    #[cfg(not(feature = "kernal-api"))]
     Ok(Box::new(cpal_capture::CpalCapture::new(config)?))
 }

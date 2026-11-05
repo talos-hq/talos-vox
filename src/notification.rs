@@ -5,6 +5,7 @@
 //! - Linux: Uses notify-send (libnotify)
 //! - macOS: Uses terminal-notifier with engine-specific icons
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::process::Stdio;
 
 #[cfg(target_os = "linux")]

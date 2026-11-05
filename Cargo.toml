@@ -13,6 +13,7 @@ keywords = ["voice", "speech", "whisper", "wayland", "linux"]
 categories = ["multimedia::audio", "accessibility"]
 
 [dependencies]
+kernal-api = { git = "https://github.com/forge-ci/kernal-api", branch = "main", features = ["audio-capture", "control-signal", "ipc-async", "fs", "desktop-input"], optional = true }
 # Async runtime
 tokio = { version = "1", features = ["full", "signal", "sync", "time", "process", "io-util"] }
 
@@ -49,7 +50,7 @@ async-trait = "0.1"
 libc = "0.2"
 
 # Audio capture
-cpal = "0.15"
+cpal = "0.18"
 hound = "3"  # WAV file reading/writing
 
 # HTTP client for remote transcription
@@ -77,7 +78,7 @@ tempfile = "3"
 sha2 = "0.10"
 
 # Audio playback (for feedback sounds)
-rodio = { version = "0.19", default-features = false, features = ["wav"] }
+rodio = { version = "0.23", default-features = false, features = ["wav", "playback"] }
 
 # Whisper speech-to-text
 whisper-rs = "0.16.0"
@@ -169,6 +170,8 @@ zbus = { version = "4", default-features = false, features = ["tokio"] }
 
 [features]
 default = []
+# OS access through forge-ci/kernal-api (the talos HAL) instead of per-OS crates.
+kernal-api = ["dep:kernal-api"]
 # OSD frontends. Each binary is gated on its own feature so users can
 # build only the rendering stack they need. Real GUI deps land in
 # Commits 4a/4b; the lists below grow then.

@@ -64,6 +64,33 @@ jobs:
       - name: cargo test
         run: cargo test
 
+  # Portability probe for the kernal-api rewrite: audio capture already goes through
+  # kernal-api on every OS; this shows what else still blocks a Windows/macOS build.
+  # Not in ci-success until it is green.
+  kernal-api:
+    name: kernal-api (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: zackees/setup-soldr@v0
+      - name: Enable long dependency paths on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        # OpenVINO's nested submodules exceed MAX_PATH even with a short CARGO_HOME.
+        # Git for Windows supports these paths when core.longpaths is enabled.
+        run: |
+          git config --global core.longpaths true
+          "CARGO_HOME=D:\c" >> $env:GITHUB_ENV
+          "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> $env:GITHUB_ENV
+      - name: check with kernal-api audio
+        run: soldr cargo check --features kernal-api --lib --keep-going
+      - name: kernal-api capture tests
+        run: soldr cargo test --features kernal-api --lib audio::kernal_capture
+
   # Aggregator job — branch protection only needs to require `ci-success`.
   # Adding/removing parallel checks above just updates the `needs:` list;
   # the protection rule never needs to be touched.

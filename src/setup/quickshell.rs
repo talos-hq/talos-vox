@@ -32,7 +32,6 @@
 
 use std::env;
 use std::fs;
-use std::os::unix::fs as unix_fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::VoxtypeError;
@@ -374,7 +373,7 @@ pub fn install_bridge_symlink(
         }
     }
 
-    unix_fs::symlink(source, target).map_err(|e| {
+    super::symlink(source, target).map_err(|e| {
         VoxtypeError::Config(format!(
             "Failed to symlink {} -> {}: {}",
             target.display(),
