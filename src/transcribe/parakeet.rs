@@ -291,6 +291,7 @@ pub(super) fn build_execution_config() -> Option<ExecutionConfig> {
     #[cfg(feature = "parakeet-cuda")]
     {
         if probe_cuda_runtime() {
+            super::onnx_ep::keep_ort_environment_until_exit();
             tracing::info!("Configuring CUDA execution provider for NVIDIA GPU acceleration");
             return Some(ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cuda));
         }
@@ -301,6 +302,7 @@ pub(super) fn build_execution_config() -> Option<ExecutionConfig> {
     #[cfg(feature = "parakeet-tensorrt")]
     {
         if probe_cuda_runtime() {
+            super::onnx_ep::keep_ort_environment_until_exit();
             tracing::info!("Configuring TensorRT execution provider for NVIDIA GPU acceleration");
             return Some(
                 ExecutionConfig::new().with_execution_provider(ExecutionProvider::TensorRT),
@@ -312,6 +314,7 @@ pub(super) fn build_execution_config() -> Option<ExecutionConfig> {
 
     #[cfg(feature = "parakeet-migraphx")]
     {
+        super::onnx_ep::keep_ort_environment_until_exit();
         tracing::info!("Configuring MIGraphX execution provider for AMD GPU acceleration");
         return Some(ExecutionConfig::new().with_execution_provider(ExecutionProvider::MIGraphX));
     }

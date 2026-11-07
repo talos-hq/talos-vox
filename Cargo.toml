@@ -195,7 +195,7 @@ gpu-hipblas = ["whisper-rs/hipblas"]
 # ML-based speaker diarization (uses ONNX for embedding extraction)
 ml-diarization = ["dep:ort", "dep:ndarray"]
 # Parakeet backend (ONNX-based, alternative to Whisper)
-parakeet = ["dep:parakeet-rs"]
+parakeet = ["dep:parakeet-rs", "dep:ort"]
 parakeet-cuda = ["parakeet", "parakeet-rs/cuda"]
 parakeet-tensorrt = ["parakeet", "parakeet-rs/tensorrt"]
 parakeet-migraphx = ["parakeet", "parakeet-rs/migraphx"]
