@@ -2871,6 +2871,20 @@ Timeout in milliseconds for the post-processing command.
 
 Output mode override. Valid values: `type`, `clipboard`, `paste`.
 
+#### replacements
+
+**Type:** Table of strings
+**Default:** None
+**Required:** No
+
+Extra word replacements for this profile. They are applied after the global
+`[text] replacements`, with the same matching rules.
+
+```toml
+[profiles.code]
+replacements = { "open paren" = "(", "close paren" = ")" }
+```
+
 ### Using Profiles
 
 Specify a profile when starting a recording:
@@ -2910,6 +2924,42 @@ post_process_timeout_ms = 60000
 ```
 
 ---
+
+## [[modes]]
+
+Modes pick a profile automatically from the application that had focus when
+you started recording, the way Hex's modes do. Each `[[modes]]` entry names a
+profile and lists the apps or window titles it applies to:
+
+```toml
+[[modes]]
+name = "editors"                                  # optional, for logs
+app = ["code", "com.microsoft.VSCode", "dev.zed.Zed"]
+profile = "code"
+
+[[modes]]
+title = ["- Slack"]                               # substring of the window title
+profile = "chat"
+```
+
+- **`app`**: matched exactly, ignoring case, against the app identifier. That
+  is the Wayland `app_id` or X11 class on Linux, the bundle identifier on
+  macOS, and the lowercase exe name on Windows. Run `voxtype context --watch`
+  and switch windows to see the values.
+- **`title`**: case-insensitive substrings of the window title. Titles are not
+  available on macOS.
+- **`profile`**: a `[profiles.NAME]` table. Its `post_process_command`,
+  `output_mode` and `replacements` apply to that dictation.
+
+Resolution happens once per recording, from the app focused **when recording
+started**. Switching windows while it transcribes does not change the result.
+The first matching entry wins. `voxtype record start --profile NAME` always
+overrides modes.
+
+Modes need a focus probe. Hyprland, Sway, X11, macOS and Windows have one.
+GNOME and KDE on Wayland expose no focus information to clients, so no mode
+ever matches there and every dictation uses the global settings, exactly as
+before.
 
 ## [text]
 

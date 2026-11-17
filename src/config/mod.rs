@@ -14,6 +14,7 @@ mod hotkey;
 mod language;
 mod load;
 mod meeting;
+mod modes;
 mod notification;
 mod output;
 mod parse;
@@ -40,6 +41,7 @@ pub use load::{load_config, save_config};
 pub use meeting::{
     MeetingAudioConfig, MeetingConfig, MeetingDiarizationConfig, MeetingSummaryConfig,
 };
+pub use modes::Mode;
 pub use notification::NotificationConfig;
 pub use output::{
     default_language_to_layout, AppliedLanguageXkbHint, FileMode, OutputConfig, OutputDriver,
