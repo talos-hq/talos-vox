@@ -2037,6 +2037,7 @@ When post-processing is enabled, voxtype automatically passes the previous dicta
 Your script receives:
 - **Stdin**: Current text only (existing scripts work unchanged)
 - **`$VOXTYPE_CONTEXT`**: Previous dictation text (optional, read it if you want context)
+- **`$VOXTYPE_APP_ID`** / **`$VOXTYPE_APP_TITLE`**: The app and window title that had focus when you started recording (Hyprland and Sway; unset elsewhere)
 
 Example usage in a cleanup script:
 ```bash

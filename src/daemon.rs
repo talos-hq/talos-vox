@@ -1550,6 +1550,7 @@ impl Daemon {
         // ever apply to a recording that was live, or already requested,
         // when it was issued (#606).
         discard_stale_cancel(self.start_request);
+        crate::context::capture_at_record_start();
         // Publish preparation before the synchronous ducking hook. Capture is
         // still closed, so neither the cue nor its acoustic tail enters audio.
         self.update_state("preparing");

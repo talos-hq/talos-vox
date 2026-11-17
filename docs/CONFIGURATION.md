@@ -2760,6 +2760,25 @@ When post-processing is enabled, voxtype passes the previous dictation's text vi
 
 See the example scripts in `examples/` for how to use `VOXTYPE_CONTEXT`.
 
+### Focused Application
+
+On Hyprland and Sway, voxtype records which application had focus when the
+recording started and passes it to the command:
+
+- `$VOXTYPE_APP_ID`: the Wayland `app_id` or X11 class, e.g. `firefox`, `code`, `Slack`
+- `$VOXTYPE_APP_TITLE`: the window title, when the compositor reports one
+
+The snapshot is taken at record start, so switching windows while a dictation
+is transcribed does not change it. On other desktops (GNOME, KDE, X11, macOS,
+Windows) both variables are unset. A script can branch on them, for example
+to keep code identifiers verbatim:
+
+```bash
+case "${VOXTYPE_APP_ID:-}" in
+  code|codium|dev.zed.Zed) exec cat ;;   # no LLM rewrite in editors
+esac
+```
+
 ### Error Handling
 
 If the post-processing command fails for any reason (command not found, non-zero
