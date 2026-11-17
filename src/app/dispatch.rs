@@ -21,8 +21,11 @@ use super::updates::check_for_updates;
 /// Check if running as root and warn for commands that don't need elevated privileges.
 /// Returns true if running as root.
 fn warn_if_root(command_name: &str) -> bool {
+    #[cfg(unix)]
     // SAFETY: getuid() is always safe to call
     let is_root = unsafe { libc::getuid() } == 0;
+    #[cfg(not(unix))]
+    let is_root = false;
     if is_root {
         eprintln!(
             "Warning: Running 'voxtype setup {}' as root is not recommended.",

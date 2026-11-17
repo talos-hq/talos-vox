@@ -72,6 +72,7 @@ pub mod audio;
 pub mod cli;
 pub mod config;
 pub mod config_set;
+pub mod control;
 pub mod cpu;
 pub mod daemon;
 pub mod daemon_status;
@@ -81,6 +82,7 @@ pub mod error;
 pub mod hotkey;
 #[cfg(target_os = "macos")]
 pub mod hotkey_macos;
+pub mod local_ipc;
 pub mod meeting;
 #[cfg(target_os = "macos")]
 pub mod menubar;

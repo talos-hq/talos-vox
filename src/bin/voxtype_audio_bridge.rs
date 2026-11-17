@@ -51,8 +51,8 @@ use std::time::{Duration, Instant};
 
 use clap::Parser;
 use tokio::io::AsyncReadExt;
-use tokio::net::UnixStream;
 use tokio::time::sleep;
+use voxtype::local_ipc::{self, Stream};
 
 use voxtype::audio::levels::{default_socket_path, AudioFrame, FRAME_BYTES};
 
@@ -132,7 +132,7 @@ async fn run(socket_path: PathBuf, reconnect: Duration) -> anyhow::Result<()> {
     let mut disconnect_announced = false;
 
     loop {
-        match UnixStream::connect(&socket_path).await {
+        match local_ipc::connect(&socket_path).await {
             Ok(stream) => {
                 tracing::info!(socket = ?socket_path, "connected to daemon");
                 emit_status("connected")?;
@@ -158,13 +158,13 @@ async fn run(socket_path: PathBuf, reconnect: Duration) -> anyhow::Result<()> {
 
 /// Read 16-byte frames from `stream` and emit one NDJSON line per frame.
 /// Returns when the stream ends (EOF, read error, or stdout write error).
-async fn stream_frames(mut stream: UnixStream, started: Instant) -> anyhow::Result<()> {
+async fn stream_frames(mut stream: Stream, started: Instant) -> anyhow::Result<()> {
     let mut buf = [0u8; FRAME_BYTES];
     let stdout = io::stdout();
     let mut out = stdout.lock();
 
     loop {
-        match stream.read_exact(&mut buf).await {
+        match AsyncReadExt::read_exact(&mut stream, &mut buf).await {
             Ok(_) => {
                 let frame = AudioFrame::from_bytes(&buf);
                 let line = encode_frame(&frame, started.elapsed());

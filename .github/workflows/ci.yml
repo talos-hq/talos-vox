@@ -64,12 +64,47 @@ jobs:
       - name: cargo test
         run: cargo test
 
+  # Windows/macOS build gate: the library compiles on both through kernal-api
+  # (audio capture, control signals, local IPC, desktop input). Required by
+  # ci-success, so a change that breaks a non-Linux build cannot merge.
+  kernal-api:
+    name: kernal-api (${{ matrix.os }})
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: zackees/setup-soldr@v0
+      - name: Enable long dependency paths on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        # OpenVINO's nested submodules exceed MAX_PATH even with a short CARGO_HOME.
+        # Git for Windows supports these paths when core.longpaths is enabled.
+        run: |
+          git config --global core.longpaths true
+          "CARGO_HOME=D:\c" >> $env:GITHUB_ENV
+          # The voxtype lib's rustc command line is long on Windows (zccache
+          # switches to a response file past 30K chars), and through the wrapper
+          # rustc sees the --check-cfg value split on spaces ("multiple
+          # input filenames ... values(cohere,"). Run this job without the
+          # rustc wrapper (soldr still pins the toolchain); cargo's own
+          # argfile fallback handles the long line.
+          "SOLDR_RUSTC_WRAPPER=none" >> $env:GITHUB_ENV
+          "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> $env:GITHUB_ENV
+      - name: check with kernal-api audio
+        run: soldr cargo check --features kernal-api --lib --keep-going
+      - name: kernal-api capture tests
+        run: soldr cargo test --features kernal-api --lib audio::kernal_capture
+
   # Aggregator job — branch protection only needs to require `ci-success`.
   # Adding/removing parallel checks above just updates the `needs:` list;
   # the protection rule never needs to be touched.
   ci-success:
     name: ci-success
-    needs: [fmt, clippy, test]
+    needs: [fmt, clippy, test, kernal-api]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -79,10 +114,12 @@ jobs:
           fmt='${{ needs.fmt.result }}'
           clippy='${{ needs.clippy.result }}'
           test='${{ needs.test.result }}'
-          echo "fmt:    $fmt"
-          echo "clippy: $clippy"
-          echo "test:   $test"
-          if [[ "$fmt" != success || "$clippy" != success || "$test" != success ]]; then
+          kernal='${{ needs.kernal-api.result }}'
+          echo "fmt:        $fmt"
+          echo "clippy:     $clippy"
+          echo "test:       $test"
+          echo "kernal-api: $kernal"
+          if [[ "$fmt" != success || "$clippy" != success || "$test" != success || "$kernal" != success ]]; then
             echo "::error::One or more required jobs failed"
             exit 1
           fi

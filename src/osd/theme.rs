@@ -400,6 +400,7 @@ mod tests {
 
     /// Build a fake Omarchy layout: `current/theme` symlinks to `themes/a`,
     /// with `themes/b` available as a flip target.
+    #[cfg(unix)]
     fn fake_omarchy() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
         let tmp = tempfile::tempdir().unwrap();
         let theme_a = tmp.path().join("themes/a");
@@ -415,12 +416,14 @@ mod tests {
     }
 
     /// Flip `current/theme` the way `ln -nsf` does: tmp symlink + rename.
+    #[cfg(unix)]
     fn flip_theme(current: &Path, target: &Path) {
         let tmp = current.join(".theme.tmp");
         std::os::unix::fs::symlink(target, &tmp).unwrap();
         fs::rename(&tmp, current.join("theme")).unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     fn symlink_flip_fires_callback_once_per_burst() {
         let (_tmp, current, _a, theme_b) = fake_omarchy();
@@ -439,6 +442,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn colors_toml_edit_in_resolved_dir_fires_callback() {
         let (_tmp, current, theme_a, _b) = fake_omarchy();
@@ -453,6 +457,7 @@ mod tests {
             .expect("editing colors.toml in the resolved theme dir should trigger the callback");
     }
 
+    #[cfg(unix)]
     #[test]
     fn inner_watch_repins_to_new_theme_after_flip() {
         let (_tmp, current, _a, theme_b) = fake_omarchy();
