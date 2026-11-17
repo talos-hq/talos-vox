@@ -419,7 +419,7 @@ $n = [Windows.UI.Notifications.ToastNotification]::new($x)
 $n.Tag = 'voxtype'
 $n.Group = 'voxtype'
 $n.ExpirationTime = [DateTimeOffset]::Now.AddSeconds(10)
-[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell1.0\powershell.exe').Show($n)
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe').Show($n)
 "#;
 
     #[cfg(windows)]
@@ -606,6 +606,8 @@ mod windows_toast_tests {
         assert!(SCRIPT.contains("Escape($env:VOXTYPE_TOAST_TITLE)"));
         assert!(SCRIPT.contains("Escape($env:VOXTYPE_TOAST_BODY)"));
         assert!(SCRIPT.contains("$n.Tag = 'voxtype'"));
+        assert!(SCRIPT.contains(r"\WindowsPowerShell\v1.0\powershell.exe"));
+        assert!(!SCRIPT.chars().any(|c| c.is_control() && c != '\n'));
     }
 
     /// On the Windows CI runner the script really posts a toast.
