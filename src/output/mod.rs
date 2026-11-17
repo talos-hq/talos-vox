@@ -37,6 +37,8 @@ pub mod pbcopy;
 pub mod post_process;
 pub mod session;
 pub mod streaming;
+#[cfg(any(windows, test))]
+pub mod windows_clipboard;
 pub mod wtype;
 pub mod xclip;
 pub mod ydotool;
@@ -332,6 +334,12 @@ pub fn create_output_chain_with_override(
                 config.auto_submit,
                 config.append_text.clone(),
             )));
+            #[cfg(windows)]
+            if config.fallback_to_clipboard {
+                chain.push(Box::new(windows_clipboard::WinClipboardOutput::new(
+                    config.append_text.clone(),
+                )));
+            }
 
             #[cfg(target_os = "macos")]
             {
@@ -392,6 +400,11 @@ pub fn create_output_chain_with_override(
             }
         }
         crate::config::OutputMode::Clipboard => {
+            #[cfg(windows)]
+            chain.push(Box::new(windows_clipboard::WinClipboardOutput::new(
+                config.append_text.clone(),
+            )));
+
             #[cfg(target_os = "macos")]
             chain.push(Box::new(pbcopy::PbcopyOutput::new(
                 config.notification.on_transcription,
@@ -409,6 +422,17 @@ pub fn create_output_chain_with_override(
             }
         }
         crate::config::OutputMode::Paste => {
+            // Windows: arboard + SendInput chord, ahead of the Linux tools.
+            #[cfg(windows)]
+            chain.push(Box::new(windows_clipboard::WinPasteOutput::new(
+                config.auto_submit,
+                config.append_text.clone(),
+                config.paste_keys.clone(),
+                pre_type_delay_ms,
+                config.restore_clipboard,
+                config.restore_clipboard_delay_ms,
+            )));
+
             // Only paste mode (no fallback as requested)
             chain.push(Box::new(paste::PasteOutput::new(
                 config.auto_submit,
