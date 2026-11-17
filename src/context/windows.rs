@@ -22,6 +22,7 @@ impl FocusProbe for Windows {
 }
 
 /// `C:\Program Files\Microsoft VS Code\Code.exe` -> `code`.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(super) fn app_id_from_image(path: &str) -> Option<String> {
     let file = path.rsplit(['\\', '/']).next()?;
     let stem = match file.rsplit_once('.') {
