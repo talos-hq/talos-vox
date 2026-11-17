@@ -64,6 +64,13 @@ jobs:
       - name: cargo test
         run: cargo test
 
+      - uses: zackees/setup-soldr@v0
+
+      # Feature-gated subcommands: the default `cargo test` above does not
+      # compile them, so their tests run here.
+      - name: feature tests (mcp)
+        run: soldr cargo test --features mcp --lib --test mcp_stdio mcp
+
   # Windows/macOS build gate: the library compiles on both through kernal-api
   # (audio capture, control signals, local IPC, desktop input). Required by
   # ci-success, so a change that breaks a non-Linux build cannot merge.

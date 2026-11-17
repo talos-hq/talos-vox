@@ -24,6 +24,8 @@ mod dispatch;
 mod info;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(feature = "mcp")]
+mod mcp;
 mod meeting;
 mod overrides;
 mod record;
