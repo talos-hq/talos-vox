@@ -86,11 +86,13 @@ jobs:
         run: |
           git config --global core.longpaths true
           "CARGO_HOME=D:\c" >> $env:GITHUB_ENV
-          # Short target dir shortens rustc's command line for this crate
-          # (one --extern path per dependency, ~12K chars). With the default
-          # target dir the soldr wrapper split the voxtype lib invocation on
-          # spaces ("multiple input filenames ... values(cohere,").
-          "CARGO_TARGET_DIR=D:\t" >> $env:GITHUB_ENV
+          # The voxtype lib's rustc command line is long on Windows (zccache
+          # switches to a response file past 30K chars), and through the wrapper
+          # rustc sees the --check-cfg value split on spaces ("multiple
+          # input filenames ... values(cohere,"). Run this job without the
+          # rustc wrapper (soldr still pins the toolchain); cargo's own
+          # argfile fallback handles the long line.
+          "SOLDR_RUSTC_WRAPPER=none" >> $env:GITHUB_ENV
           "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> $env:GITHUB_ENV
       - name: check with kernal-api audio
         run: soldr cargo check --features kernal-api --lib --keep-going
