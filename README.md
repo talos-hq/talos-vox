@@ -284,6 +284,7 @@ Setup subcommands:
   voxtype setup              Run basic dependency checks (default)
   voxtype setup --download   Download the configured Whisper model
   voxtype setup systemd      Install/manage systemd user service
+  voxtype setup autostart    Start at login on Windows (HKCU Run key)
   voxtype setup waybar       Generate Waybar module configuration
   voxtype setup model        Interactive model selection and download
   voxtype setup gpu          Manage GPU acceleration (switch CPU/Vulkan)

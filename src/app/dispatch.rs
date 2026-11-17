@@ -192,6 +192,15 @@ pub(crate) async fn dispatch(
                     warn_if_root("check");
                     setup::run_checks(&config).await?;
                 }
+                Some(SetupAction::Autostart { uninstall, status }) => {
+                    if status {
+                        setup::windows_autostart::status().await?;
+                    } else if uninstall {
+                        setup::windows_autostart::uninstall().await?;
+                    } else {
+                        setup::windows_autostart::install().await?;
+                    }
+                }
                 Some(SetupAction::Systemd { uninstall, status }) => {
                     warn_if_root("systemd");
                     if status {
