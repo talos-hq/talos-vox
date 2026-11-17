@@ -418,6 +418,45 @@ voxtype meeting export latest          # Export transcript (markdown)
 voxtype meeting summarize latest       # Generate AI summary
 ```
 
+### `voxtype history` and `voxtype paste-last`
+
+An opt-in log of your recent dictations. It is off by default. Turn it on in
+`config.toml`:
+
+```toml
+[history]
+enabled = true
+```
+
+```bash
+voxtype history list          # Recent dictations, newest first (-n 50, --json)
+voxtype history last          # Text of the most recent one
+voxtype history clear         # Delete them all
+voxtype paste-last            # Type the most recent dictation again
+```
+
+`paste-last` is meant for a key binding. It recovers a dictation that went to
+the wrong window, or that you want to use a second time. Bind it the same way
+you bind `voxtype record`. Ctrl+Alt+V is a common choice:
+
+```bash
+# Hyprland
+bind = CTRL ALT, V, exec, voxtype paste-last
+# Sway
+bindsym Ctrl+Alt+v exec voxtype paste-last
+# River
+riverctl map normal Control+Alt V spawn "voxtype paste-last"
+```
+
+On KDE and GNOME, add a custom global shortcut that runs `voxtype paste-last`
+(see [KDE Plasma](#kde-plasma-kwin) below for where that lives).
+
+Only the final text is kept, never audio. The log is capped at
+`max_entries` (500) and `retention_days` (7), and stored in
+`~/.local/state/voxtype/history.db`. See `[history]` in
+[CONFIGURATION.md](CONFIGURATION.md#history) for redaction and the macOS and
+Windows paths.
+
 ---
 
 ## Configuration

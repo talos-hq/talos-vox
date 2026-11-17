@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use voxtype::{
     config,
-    mcp::{Dictation, ToolHost, Transcript},
+    mcp::{Dictation, HistoryPage, ToolHost, Transcript},
     status_json::{format_state_json, ExtendedStatusInfo},
 };
 
@@ -153,6 +153,31 @@ impl ToolHost for Host {
             model: self.config.model_name().to_string(),
             language: self.config.active_language().map(str::to_string),
             duration_ms,
+        })
+    }
+
+    fn history_list(&self, limit: usize) -> Result<HistoryPage, String> {
+        let path = voxtype::history::default_path();
+        // Never create a database for a user who has history off.
+        if !self.config.history.enabled && !path.exists() {
+            return Ok(HistoryPage {
+                enabled: false,
+                entries: serde_json::json!([]),
+            });
+        }
+        let store = voxtype::history::Store::open(&path)
+            .map_err(|e| format!("cannot open {}: {e}", path.display()))?;
+        if self.config.history.enabled {
+            store
+                .prune(&self.config.history, chrono::Utc::now().timestamp_millis())
+                .map_err(|e| format!("history prune failed: {e}"))?;
+        }
+        let entries = store
+            .list(limit)
+            .map_err(|e| format!("history read failed: {e}"))?;
+        Ok(HistoryPage {
+            enabled: self.config.history.enabled,
+            entries: serde_json::to_value(entries).map_err(|e| e.to_string())?,
         })
     }
 }

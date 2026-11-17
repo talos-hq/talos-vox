@@ -51,6 +51,7 @@ fn mcp_client_lists_and_calls_every_tool() {
         json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"transcribe_file","arguments":{"path":wav}}}),
         json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"dictate_start"}}),
         json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"dictate_stop"}}),
+        json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"history_list"}}),
     ];
     for r in &requests {
         writeln!(stdin, "{r}").unwrap();
@@ -68,7 +69,7 @@ fn mcp_client_lists_and_calls_every_tool() {
         .collect();
     let status = child.wait().unwrap();
     assert!(status.success(), "voxtype mcp exited with {status}");
-    assert_eq!(replies.len(), 6, "replies: {replies:?}");
+    assert_eq!(replies.len(), 7, "replies: {replies:?}");
 
     assert_eq!(replies[0]["id"], 1);
     assert_eq!(replies[0]["result"]["serverInfo"]["name"], "voxtype");
@@ -82,7 +83,13 @@ fn mcp_client_lists_and_calls_every_tool() {
         .collect();
     assert_eq!(
         tools,
-        ["status", "transcribe_file", "dictate_start", "dictate_stop"]
+        [
+            "status",
+            "transcribe_file",
+            "dictate_start",
+            "dictate_stop",
+            "history_list"
+        ]
     );
 
     let mcp_status = &replies[2]["result"];
@@ -115,6 +122,15 @@ fn mcp_client_lists_and_calls_every_tool() {
         .as_str()
         .unwrap()
         .contains("dictate_start"));
+
+    // History is off in this config and the per-OS store is empty.
+    let history = &replies[6]["result"]["structuredContent"];
+    assert_eq!(
+        history,
+        &json!({"enabled": false, "entries": []}),
+        "{}",
+        replies[6]
+    );
 }
 
 struct Daemon(Child);
