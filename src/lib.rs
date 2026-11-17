@@ -84,6 +84,8 @@ pub mod history;
 pub mod hotkey;
 #[cfg(target_os = "macos")]
 pub mod hotkey_macos;
+#[cfg(any(windows, test))]
+pub mod hotkey_windows;
 pub mod local_ipc;
 #[cfg(feature = "mcp")]
 pub mod mcp;

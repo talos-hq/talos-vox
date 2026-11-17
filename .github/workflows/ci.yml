@@ -107,6 +107,9 @@ jobs:
         run: soldr cargo test --features kernal-api --lib audio::kernal_capture
       - name: focus probe tests
         run: soldr cargo test --features kernal-api --lib context::
+      - name: Windows hotkey tests
+        if: runner.os == 'Windows'
+        run: soldr cargo test --features kernal-api --lib hotkey_windows
 
   # Aggregator job — branch protection only needs to require `ci-success`.
   # Adding/removing parallel checks above just updates the `needs:` list;
