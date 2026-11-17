@@ -68,6 +68,10 @@ pub(crate) async fn dispatch(
     #[cfg(not(target_os = "macos"))]
     let default_command = Commands::Daemon;
 
+    // `voxtype mcp` re-runs `voxtype record` with the same --config.
+    #[cfg(feature = "mcp")]
+    let mcp_config_arg = cli.config.clone();
+
     // Run the appropriate command
     match cli.command.unwrap_or(default_command) {
         Commands::Daemon => {
@@ -466,7 +470,7 @@ pub(crate) async fn dispatch(
 
         #[cfg(feature = "mcp")]
         Commands::Mcp => {
-            super::mcp::run_mcp(config).await?;
+            super::mcp::run_mcp(config, mcp_config_arg).await?;
         }
     }
 

@@ -9,6 +9,10 @@
 //! from them:
 //! - `status`: the `voxtype status --format json --extended` payload.
 //! - `transcribe_file`: `voxtype transcribe <file>`, returning the text.
+//! - `dictate_start` / `dictate_stop`: a live dictation through the running
+//!   daemon, returned to the caller instead of typed. Built on the
+//!   `record start --file` / `record stop --wait --json` contract
+//!   (docs/INTEGRATIONS.md), so the daemon needs no new verb.
 //!
 //! The protocol layer lives here; the binary supplies the tool bodies
 //! through [`ToolHost`], so this file stays testable without a model.
@@ -43,7 +47,34 @@ pub trait ToolHost {
     fn status(&self) -> Result<String, String>;
     /// Transcribe a WAV file, optionally with another engine.
     fn transcribe_file(&self, path: &Path, engine: Option<&str>) -> Result<Transcript, String>;
+    /// Start recording on the daemon, capturing the text for `dictate_stop`.
+    /// Returns a short human-readable confirmation.
+    fn dictate_start(&self) -> Result<String, String>;
+    /// Stop the recording `dictate_start` began and wait up to
+    /// `timeout_secs` for its transcript.
+    fn dictate_stop(&self, timeout_secs: u64) -> Result<Dictation, String>;
 }
+
+/// The result of `dictate_stop`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Dictation {
+    /// `ok`, `empty` (no speech, or too short), `timeout` or `error`, as
+    /// reported by `voxtype record stop --wait --json`.
+    pub status: String,
+    /// Processed transcript; empty unless `status` is `ok`.
+    pub text: String,
+    /// Daemon-side failure detail for `error`.
+    pub message: Option<String>,
+    pub engine: String,
+    pub model: String,
+    /// Configured language code, or `None` for auto-detect.
+    pub language: Option<String>,
+    /// Wall time from `dictate_start` to `dictate_stop`.
+    pub duration_ms: u64,
+}
+
+/// Default and upper bound for `dictate_stop`'s wait, in seconds.
+pub const DICTATE_STOP_TIMEOUT_SECS: u64 = 120;
 
 fn tool_list() -> Value {
     json!([
@@ -81,6 +112,42 @@ fn tool_list() -> Value {
                 "required": ["text", "engine", "duration_ms", "speech"]
             },
             "annotations": { "readOnlyHint": true, "openWorldHint": false }
+        },
+        {
+            "name": "dictate_start",
+            "title": "Start dictation",
+            "description": "Start recording from the microphone through the running voxtype daemon. \
+                            The transcript is held for dictate_stop instead of being typed into the focused window. \
+                            Fails if the daemon is not running.",
+            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false }
+        },
+        {
+            "name": "dictate_stop",
+            "title": "Stop dictation and return the text",
+            "description": "Stop the recording started by dictate_start and wait for its transcript. \
+                            status is ok (text holds the transcript), empty (no speech or too short), timeout or error.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "timeout_secs": { "type": "integer", "minimum": 1, "maximum": DICTATE_STOP_TIMEOUT_SECS, "description": "How long to wait for the transcript (default 120)." }
+                },
+                "additionalProperties": false
+            },
+            "outputSchema": {
+                "type": "object",
+                "properties": {
+                    "status": { "type": "string", "enum": ["ok", "empty", "timeout", "error"] },
+                    "text": { "type": "string" },
+                    "message": { "type": ["string", "null"] },
+                    "engine": { "type": "string" },
+                    "model": { "type": "string" },
+                    "language": { "type": ["string", "null"] },
+                    "duration_ms": { "type": "integer" }
+                },
+                "required": ["status", "text", "engine", "model", "language", "duration_ms"]
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false }
         }
     ])
 }
@@ -130,6 +197,52 @@ fn call_tool(host: &dyn ToolHost, params: &Value) -> Result<Value, (i64, String)
                         "speech": t.speech,
                     });
                     tool_ok(t.text, structured)
+                }
+                Err(e) => tool_err(e),
+            })
+        }
+        "dictate_start" => Ok(match host.dictate_start() {
+            Ok(message) => tool_ok(message.clone(), json!({ "message": message })),
+            Err(e) => tool_err(e),
+        }),
+        "dictate_stop" => {
+            let timeout = match args.get("timeout_secs") {
+                None | Some(Value::Null) => DICTATE_STOP_TIMEOUT_SECS,
+                Some(v) => v
+                    .as_u64()
+                    .filter(|t| (1..=DICTATE_STOP_TIMEOUT_SECS).contains(t))
+                    .ok_or((
+                        -32602,
+                        format!(
+                            "timeout_secs must be an integer from 1 to {DICTATE_STOP_TIMEOUT_SECS}"
+                        ),
+                    ))?,
+            };
+            Ok(match host.dictate_stop(timeout) {
+                Ok(d) => {
+                    let structured = json!({
+                        "status": d.status,
+                        "text": d.text,
+                        "message": d.message,
+                        "engine": d.engine,
+                        "model": d.model,
+                        "language": d.language,
+                        "duration_ms": d.duration_ms,
+                    });
+                    let text = match d.status.as_str() {
+                        "ok" => d.text,
+                        other => format!(
+                            "{other}{}",
+                            d.message.map(|m| format!(": {m}")).unwrap_or_default()
+                        ),
+                    };
+                    // Only a real failure is an error; `empty` is a normal
+                    // outcome (the user said nothing).
+                    let mut result = tool_ok(text, structured);
+                    if matches!(d.status.as_str(), "error" | "timeout") {
+                        result["isError"] = json!(true);
+                    }
+                    result
                 }
                 Err(e) => tool_err(e),
             })
@@ -221,6 +334,20 @@ mod tests {
                 Err(format!("cannot open {}", path.display()))
             }
         }
+        fn dictate_start(&self) -> Result<String, String> {
+            Ok("recording".into())
+        }
+        fn dictate_stop(&self, timeout_secs: u64) -> Result<Dictation, String> {
+            Ok(Dictation {
+                status: if timeout_secs == 1 { "timeout" } else { "ok" }.into(),
+                text: "dictated".into(),
+                message: None,
+                engine: "whisper".into(),
+                model: "base.en".into(),
+                language: Some("en".into()),
+                duration_ms: 2000,
+            })
+        }
     }
 
     fn run(lines: &[Value]) -> Vec<Value> {
@@ -253,7 +380,10 @@ mod tests {
             .iter()
             .map(|t| t["name"].as_str().unwrap().to_string())
             .collect();
-        assert_eq!(names, ["status", "transcribe_file"]);
+        assert_eq!(
+            names,
+            ["status", "transcribe_file", "dictate_start", "dictate_stop"]
+        );
         assert_eq!(replies[2]["result"]["structuredContent"]["text"], "idle");
         assert_eq!(replies[2]["result"]["isError"], false);
         let t = &replies[3]["result"];
@@ -294,5 +424,27 @@ mod tests {
             .collect();
         assert_eq!(lines[0]["error"]["code"], -32700);
         assert_eq!(lines[1]["id"], 7);
+    }
+
+    #[test]
+    fn dictation_round_trip_and_timeout_bounds() {
+        let replies = run(&[
+            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"dictate_start"}}),
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"dictate_stop","arguments":{}}}),
+            json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"dictate_stop","arguments":{"timeout_secs":1}}}),
+            json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"dictate_stop","arguments":{"timeout_secs":0}}}),
+            json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"dictate_stop","arguments":{"timeout_secs":"9"}}}),
+        ]);
+        assert_eq!(replies[0]["result"]["isError"], false);
+        let ok = &replies[1]["result"];
+        assert_eq!(ok["content"][0]["text"], "dictated");
+        assert_eq!(
+            ok["structuredContent"],
+            json!({"status":"ok","text":"dictated","message":null,"engine":"whisper","model":"base.en","language":"en","duration_ms":2000})
+        );
+        assert_eq!(ok["isError"], false);
+        assert_eq!(replies[2]["result"]["isError"], true);
+        assert_eq!(replies[3]["error"]["code"], -32602);
+        assert_eq!(replies[4]["error"]["code"], -32602);
     }
 }

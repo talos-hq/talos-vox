@@ -9,7 +9,8 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
@@ -27,7 +28,7 @@ fn voxtype(home: &Path, config: &Path) -> Command {
 }
 
 #[test]
-fn mcp_client_lists_and_calls_both_tools() {
+fn mcp_client_lists_and_calls_every_tool() {
     let home = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(home.path().join("run")).unwrap();
     let config = home.path().join("config.toml");
@@ -48,6 +49,8 @@ fn mcp_client_lists_and_calls_both_tools() {
         json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
         json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"status","arguments":{}}}),
         json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"transcribe_file","arguments":{"path":wav}}}),
+        json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"dictate_start"}}),
+        json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"dictate_stop"}}),
     ];
     for r in &requests {
         writeln!(stdin, "{r}").unwrap();
@@ -65,7 +68,7 @@ fn mcp_client_lists_and_calls_both_tools() {
         .collect();
     let status = child.wait().unwrap();
     assert!(status.success(), "voxtype mcp exited with {status}");
-    assert_eq!(replies.len(), 4, "replies: {replies:?}");
+    assert_eq!(replies.len(), 6, "replies: {replies:?}");
 
     assert_eq!(replies[0]["id"], 1);
     assert_eq!(replies[0]["result"]["serverInfo"]["name"], "voxtype");
@@ -77,7 +80,10 @@ fn mcp_client_lists_and_calls_both_tools() {
         .iter()
         .map(|t| t["name"].as_str().unwrap())
         .collect();
-    assert_eq!(tools, ["status", "transcribe_file"]);
+    assert_eq!(
+        tools,
+        ["status", "transcribe_file", "dictate_start", "dictate_stop"]
+    );
 
     let mcp_status = &replies[2]["result"];
     assert_eq!(mcp_status["isError"], false, "{mcp_status}");
@@ -100,4 +106,97 @@ fn mcp_client_lists_and_calls_both_tools() {
     assert_eq!(transcribe["id"], 4);
     assert!(transcribe.get("error").is_none(), "{transcribe}");
     assert_eq!(transcribe["result"]["isError"], true, "{transcribe}");
+
+    // No daemon is running: dictation is refused as a tool error, and a
+    // stop without a start says so.
+    assert_eq!(replies[4]["result"]["isError"], true, "{}", replies[4]);
+    assert_eq!(replies[5]["result"]["isError"], true, "{}", replies[5]);
+    assert!(replies[5]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("dictate_start"));
+}
+
+struct Daemon(Child);
+
+impl Drop for Daemon {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// dictate_start / dictate_stop against a real daemon. Runners have no
+/// microphone or model, so the outcome is `empty` or `error`; what matters
+/// is that the round trip completes well before the timeout and that the
+/// text never went to the typing path.
+#[test]
+fn mcp_dictation_round_trip_through_the_daemon() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join("run")).unwrap();
+    let config = home.path().join("config.toml");
+    std::fs::write(
+        &config,
+        "state_file = \"auto\"\n\n\
+         [hotkey]\nenabled = false\n\n\
+         [osd]\nenabled = false\n\n\
+         [whisper]\non_demand_loading = true\n",
+    )
+    .unwrap();
+
+    let mut daemon = Daemon(
+        voxtype(home.path(), &config)
+            .arg("daemon")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let socket = home.path().join("run/voxtype/control.sock");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while voxtype::control::request(&socket, "status").is_err() {
+        assert!(daemon.0.try_wait().unwrap().is_none(), "daemon exited");
+        assert!(Instant::now() < deadline, "daemon never came up");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    let mut child = voxtype(home.path(), &config)
+        .arg("mcp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap()).lines();
+    let mut call = |id: u64, name: &str, args: Value| -> Value {
+        let req = json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":name,"arguments":args}});
+        writeln!(stdin, "{req}").unwrap();
+        let line = stdout.next().unwrap().unwrap();
+        serde_json::from_str(&line).unwrap()
+    };
+
+    let started = call(1, "dictate_start", json!({}));
+    assert_eq!(started["result"]["isError"], false, "{started}");
+    let again = call(2, "dictate_start", json!({}));
+    assert_eq!(
+        again["result"]["isError"], true,
+        "second start must be refused"
+    );
+    std::thread::sleep(Duration::from_millis(800));
+
+    let begun = Instant::now();
+    let stopped = call(3, "dictate_stop", json!({"timeout_secs": 30}));
+    let result = &stopped["result"]["structuredContent"];
+    assert!(
+        matches!(result["status"].as_str(), Some("empty" | "error" | "ok")),
+        "{stopped}"
+    );
+    assert!(begun.elapsed() < Duration::from_secs(30), "stop timed out");
+    assert_eq!(result["engine"], "whisper");
+    assert!(result["duration_ms"].as_u64().unwrap() >= 800);
+
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
 }

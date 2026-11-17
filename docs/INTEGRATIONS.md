@@ -114,6 +114,8 @@ daemon is not modified. Logs go to stderr.
 |------|-----------|---------|
 | `status` | none | The `voxtype status --format json --extended` object, byte for byte. Needs `state_file` configured |
 | `transcribe_file` | `path`, optional `engine` | `{text, engine, duration_ms, speech}`. Same pipeline as `voxtype transcribe`: replacements, spoken punctuation, VAD. `speech` is false when VAD found none |
+| `dictate_start` | none | Starts a recording on the running daemon. The transcript is held for `dictate_stop` and is not typed into the focused window. Fails if the daemon is down or a dictation is already open |
+| `dictate_stop` | optional `timeout_secs` (1-120, default 120) | `{status, text, message, engine, model, language, duration_ms}`. `status` uses the `record stop --wait` values: `ok`, `empty`, `timeout`, `error`. `timeout` and `error` set `isError` |
 
 A tool that fails (missing file, model not downloaded, `state_file` unset)
 returns a result with `isError: true` and the reason as text. The session
@@ -121,6 +123,11 @@ continues.
 
 `transcribe_file` loads the model in the MCP process, not the daemon, so the
 first call pays model load time.
+
+`dictate_start` and `dictate_stop` go through the same `record start --file` /
+`record stop --wait --json` contract described above. The transcript file sits
+under `$XDG_RUNTIME_DIR/voxtype/mcp/` and is deleted once it has been read.
+`duration_ms` is the wall time between the two calls.
 
 ## Control socket protocol
 
