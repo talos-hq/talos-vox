@@ -11,6 +11,7 @@
 //! - X11 sessions (`XDG_SESSION_TYPE=x11`, or `DISPLAY` without
 //!   `WAYLAND_DISPLAY`): `xprop` on `_NET_ACTIVE_WINDOW`.
 //! - macOS: the frontmost app's bundle identifier (`lsappinfo`). No title.
+//! - Windows: the foreground window's exe stem and title (Win32).
 //!
 //! Everywhere else (GNOME and KDE on Wayland, which expose no focus
 //! protocol to clients) there is no snapshot: the variables are unset and
@@ -20,6 +21,7 @@
 mod hyprland;
 mod macos;
 mod sway;
+mod windows;
 mod x11;
 
 use std::process::{Command, Stdio};
@@ -137,6 +139,9 @@ pub fn probe_for(session: &Session) -> Option<Box<dyn FocusProbe>> {
 pub fn detect() -> Option<Box<dyn FocusProbe>> {
     if cfg!(target_os = "macos") {
         return Some(Box::new(macos::MacOs));
+    }
+    if cfg!(windows) {
+        return Some(Box::new(windows::Windows));
     }
     probe_for(&Session::from_env())
 }

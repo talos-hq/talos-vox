@@ -2762,16 +2762,18 @@ See the example scripts in `examples/` for how to use `VOXTYPE_CONTEXT`.
 
 ### Focused Application
 
-On Hyprland, Sway and X11 sessions, voxtype records which application had
-focus when the recording started and passes it to the command:
+On Hyprland, Sway, X11, macOS and Windows, voxtype records which application
+had focus when the recording started and passes it to the command:
 
-- `$VOXTYPE_APP_ID`: the Wayland `app_id` or X11 class, e.g. `firefox`, `code`, `Slack`
-- `$VOXTYPE_APP_TITLE`: the window title, when the compositor reports one
+- `$VOXTYPE_APP_ID`: the Wayland `app_id` or X11 class (`firefox`, `code`,
+  `Slack`), the macOS bundle identifier (`com.microsoft.VSCode`), or the
+  Windows exe name, lowercased (`code`, `windowsterminal`)
+- `$VOXTYPE_APP_TITLE`: the window title, when the platform reports one. It
+  is never set on macOS, where reading titles needs Screen Recording
 
 The snapshot is taken at record start, so switching windows while a dictation
 is transcribed does not change it. On other desktops (GNOME and KDE on
-Wayland, other wlroots compositors, and for now macOS and Windows) both
-variables are unset. Run `voxtype context` (or `voxtype context --watch`) to
+Wayland, and wlroots compositors other than Sway) both variables are unset. Run `voxtype context` (or `voxtype context --watch`) to
 see what your session reports. A script can branch on them, for example
 to keep code identifiers verbatim:
 
