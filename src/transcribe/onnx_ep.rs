@@ -26,6 +26,40 @@ use ort::execution_providers::ExecutionProviderDispatch;
 #[cfg(feature = "onnx-common")]
 use ort::session::builder::{BuilderResult, SessionBuilder};
 
+/// Keep the ONNX Runtime environment alive until the process is gone.
+///
+/// Must be called before any GPU EP is registered. Registering one loads a
+/// shared provider library (`libonnxruntime_providers_<ep>.so`), and from then
+/// on releasing the environment during process exit corrupts the heap:
+///
+/// 1. glibc's `exit` runs every `__cxa_atexit` handler before `_dl_fini`, so
+///    the C++ destructor of the provider's static `s_kernel_registry` frees
+///    its `shared_ptr` control block without clearing the pointer.
+/// 2. `ort` drops its global environment from a `.fini_array` hook, i.e. in
+///    `_dl_fini`, which is too late. `ReleaseEnv` reaches
+///    `UnloadSharedProviders` -> `DeleteRegistry`, and that second `reset()`
+///    decrements the use count at offset 8 of the freed block.
+/// 3. Offset 8 of a freed glibc chunk is its `bk` link, so a later free aborts
+///    with `corrupted double-linked list` (exit 134), even though the
+///    transcript was already printed. See talos-hq/talos-vox#4.
+///
+/// Leaking one reference means `ort`'s hook drops only its own, `ReleaseEnv`
+/// never runs, and the stale `reset()` never happens. The other exit handlers
+/// still run; the OS reclaims the environment. `current()` creates the default
+/// environment if none exists, which is what session creation would do anyway.
+///
+/// Remove this once `ort` releases the environment before C++ destructors on
+/// Linux.
+#[cfg(any(feature = "parakeet", feature = "onnx-common"))]
+pub fn keep_ort_environment_until_exit() {
+    static PINNED: std::sync::Once = std::sync::Once::new();
+    PINNED.call_once(|| match ort::environment::current() {
+        Ok(env) => std::mem::forget(env),
+        // Session creation will hit and report the same error.
+        Err(e) => tracing::warn!("Could not pin ONNX Runtime environment: {e}"),
+    });
+}
+
 /// Register GPU EPs onto a session builder.
 ///
 /// `engine_label` and `session_label` are used only for logging
@@ -42,6 +76,7 @@ pub fn register_gpu_eps(
     if providers.is_empty() {
         return Ok(builder);
     }
+    keep_ort_environment_until_exit();
     let names: Vec<&'static str> = providers.iter().map(|(n, _)| *n).collect();
     tracing::info!("{engine_label} {session_label}: registering execution providers {names:?}");
     let dispatches: Vec<_> = providers.into_iter().map(|(_, ep)| ep).collect();
