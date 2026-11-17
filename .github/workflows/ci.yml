@@ -110,6 +110,9 @@ jobs:
       - name: Windows hotkey tests
         if: runner.os == 'Windows'
         run: soldr cargo test --features kernal-api --lib hotkey_windows
+      - name: Windows toast tests
+        if: runner.os == 'Windows'
+        run: soldr cargo test --features kernal-api --lib windows_toast
 
   # Aggregator job — branch protection only needs to require `ci-success`.
   # Adding/removing parallel checks above just updates the `needs:` list;

@@ -242,8 +242,14 @@ async fn send_notification_with_lifetime(
         notification::send_with_engine(&title, body, engine_for_icon).await;
     }
 
+    #[cfg(windows)]
+    {
+        let _ = (show_engine_icon, engine, urgency, lifetime);
+        notification::send(&title, body).await;
+    }
+
     // No desktop notification backend on other hosts yet.
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     let _ = (title, body, show_engine_icon, engine, urgency, lifetime);
 }
 
