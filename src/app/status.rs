@@ -9,6 +9,17 @@ use voxtype::{
     status_json::{format_state_json, ExtendedStatusInfo},
 };
 
+/// The daemon's current state word, or `stopped` when no daemon is
+/// running (so a stale state file is never reported).
+pub(crate) fn read_state(state_path: &std::path::Path) -> String {
+    let state = if !is_daemon_running() {
+        "stopped".to_string()
+    } else {
+        std::fs::read_to_string(state_path).unwrap_or_else(|_| "stopped".to_string())
+    };
+    state.trim().to_string()
+}
+
 /// Run the status command - show current daemon state
 pub(crate) async fn run_status(
     config: &config::Config,
@@ -49,12 +60,8 @@ pub(crate) async fn run_status(
     if !follow {
         // One-shot: just read and print current state
         // First check if daemon is actually running to avoid stale state
-        let state = if !is_daemon_running() {
-            "stopped".to_string()
-        } else {
-            std::fs::read_to_string(&state_path).unwrap_or_else(|_| "stopped".to_string())
-        };
-        let state = state.trim();
+        let state = read_state(&state_path);
+        let state = state.as_str();
 
         if format == "json" {
             println!("{}", format_state_json(state, &icons, ext_info.as_ref()));
@@ -70,12 +77,8 @@ pub(crate) async fn run_status(
     use std::time::Duration;
 
     // Print initial state (check if daemon is running to avoid stale state)
-    let state = if !is_daemon_running() {
-        "stopped".to_string()
-    } else {
-        std::fs::read_to_string(&state_path).unwrap_or_else(|_| "stopped".to_string())
-    };
-    let state = state.trim();
+    let state = read_state(&state_path);
+    let state = state.as_str();
     if format == "json" {
         println!("{}", format_state_json(state, &icons, ext_info.as_ref()));
     } else {

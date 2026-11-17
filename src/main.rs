@@ -29,7 +29,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // Check if this is the worker command (needs stderr-only logging)
-    let is_worker = matches!(cli.command, Some(Commands::TranscribeWorker { .. }));
+    let stdout_is_protocol = cli.command.as_ref().is_some_and(Commands::logs_to_stderr);
 
     // Initialize logging
     let log_level = if cli.quiet {
@@ -42,8 +42,8 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    if is_worker {
-        // Worker uses stderr for logging (stdout is reserved for IPC protocol)
+    if stdout_is_protocol {
+        // Worker and MCP log to stderr: their stdout carries a protocol
         tracing_subscriber::fmt()
             .with_env_filter(
                 EnvFilter::try_from_default_env()

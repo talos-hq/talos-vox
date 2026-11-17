@@ -4,22 +4,46 @@
 //! one call site (this command). Per the refactoring policy: don't extract
 //! an abstraction from a single use site.
 
-use std::path::PathBuf;
+use std::path::Path;
 use voxtype::{config, transcribe, vad};
 
 /// Transcribe an audio file
-pub(crate) fn transcribe_file(config: &config::Config, path: &PathBuf) -> anyhow::Result<()> {
+pub(crate) fn transcribe_file(config: &config::Config, path: &Path) -> anyhow::Result<()> {
+    let outcome = transcribe_path(config, path, &mut |line| println!("{}", line))?;
+    if let Some(text) = outcome.text {
+        println!("\n{}", text);
+    }
+    Ok(())
+}
+
+/// What [`transcribe_path`] produced.
+pub(crate) struct Outcome {
+    /// Processed transcript, or `None` when VAD found no speech.
+    pub text: Option<String>,
+    /// Length of the 16 kHz mono audio, in seconds. Read by `voxtype mcp`.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+    pub duration_secs: f32,
+}
+
+/// Load, resample, VAD-check and transcribe `path`. Progress lines go to
+/// `progress` (stdout for the CLI, nowhere for `voxtype mcp`, whose stdout
+/// is the protocol); warnings go to stderr.
+pub(crate) fn transcribe_path(
+    config: &config::Config,
+    path: &Path,
+    progress: &mut dyn FnMut(String),
+) -> anyhow::Result<Outcome> {
     use hound::WavReader;
 
-    println!("Loading audio file: {:?}", path);
+    progress(format!("Loading audio file: {:?}", path));
 
     let reader = WavReader::open(path)?;
     let spec = reader.spec();
 
-    println!(
+    progress(format!(
         "Audio format: {} Hz, {} channel(s), {:?}",
         spec.sample_rate, spec.channels, spec.sample_format
-    );
+    ));
 
     // Convert samples to f32 mono at 16kHz
     let samples: Vec<f32> = match spec.sample_format {
@@ -49,30 +73,37 @@ pub(crate) fn transcribe_file(config: &config::Config, path: &PathBuf) -> anyhow
 
     // Resample to 16kHz if needed
     let final_samples = if spec.sample_rate != 16000 {
-        println!("Resampling from {} Hz to 16000 Hz...", spec.sample_rate);
+        progress(format!(
+            "Resampling from {} Hz to 16000 Hz...",
+            spec.sample_rate
+        ));
         voxtype::audio::resampler::resample_buffer(&mono_samples, spec.sample_rate, 16000)
     } else {
         mono_samples
     };
 
-    println!(
+    let duration_secs = final_samples.len() as f32 / 16000.0;
+    progress(format!(
         "Processing {} samples ({:.2}s)...",
         final_samples.len(),
-        final_samples.len() as f32 / 16000.0
-    );
+        duration_secs
+    ));
 
     // Run VAD if enabled
     if let Ok(Some(vad)) = vad::create_vad(config) {
         match vad.detect(&final_samples) {
             Ok(result) => {
-                println!(
+                progress(format!(
                     "VAD: {:.2}s speech ({:.1}% of audio)",
                     result.speech_duration_secs,
                     result.speech_ratio * 100.0
-                );
+                ));
                 if !result.has_speech {
-                    println!("No speech detected, skipping transcription.");
-                    return Ok(());
+                    progress("No speech detected, skipping transcription.".to_string());
+                    return Ok(Outcome {
+                        text: None,
+                        duration_secs,
+                    });
                 }
             }
             Err(e) => {
@@ -86,8 +117,10 @@ pub(crate) fn transcribe_file(config: &config::Config, path: &PathBuf) -> anyhow
     let transcriber = transcribe::create_transcriber(config)?;
     let text = transcriber.transcribe(&final_samples)?;
 
-    println!("\n{}", process_transcript(config, &text));
-    Ok(())
+    Ok(Outcome {
+        text: Some(process_transcript(config, &text)),
+        duration_secs,
+    })
 }
 
 /// Apply the configured text pipeline (replacements, spoken punctuation,

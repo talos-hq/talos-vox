@@ -83,6 +83,8 @@ pub mod hotkey;
 #[cfg(target_os = "macos")]
 pub mod hotkey_macos;
 pub mod local_ipc;
+#[cfg(feature = "mcp")]
+pub mod mcp;
 pub mod meeting;
 #[cfg(target_os = "macos")]
 pub mod menubar;

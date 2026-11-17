@@ -172,6 +172,8 @@ zbus = { version = "4", default-features = false, features = ["tokio"] }
 default = []
 # OS access through forge-ci/kernal-api (the talos HAL) instead of per-OS crates.
 kernal-api = ["dep:kernal-api"]
+# `voxtype mcp`: Model Context Protocol server over stdio. No extra deps.
+mcp = []
 # OSD frontends. Each binary is gated on its own feature so users can
 # build only the rendering stack they need. Real GUI deps land in
 # Commits 4a/4b; the lists below grow then.

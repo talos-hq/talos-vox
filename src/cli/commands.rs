@@ -171,4 +171,27 @@ pub enum Commands {
 
     /// Check for updates
     CheckUpdate,
+
+    /// Serve the Model Context Protocol on stdin/stdout
+    ///
+    /// For agent hosts (Claude, Hermes, Talos) that launch MCP servers as a
+    /// subprocess. Tools: `status` (the `status --format json --extended`
+    /// object) and `transcribe_file` (same as `voxtype transcribe`). Stdio
+    /// only: nothing listens on a socket or port. Logs go to stderr.
+    ///
+    /// Example client config: {"command": "voxtype", "args": ["mcp"]}
+    #[cfg(feature = "mcp")]
+    Mcp,
+}
+
+impl Commands {
+    /// Commands whose stdout is a machine protocol, so logs must go to stderr.
+    pub fn logs_to_stderr(&self) -> bool {
+        match self {
+            Commands::TranscribeWorker { .. } => true,
+            #[cfg(feature = "mcp")]
+            Commands::Mcp => true,
+            _ => false,
+        }
+    }
 }

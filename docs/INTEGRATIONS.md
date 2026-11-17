@@ -93,6 +93,35 @@ decides for itself when to send it.
 A `[profiles.agent]` block with a `post_process_command` is a good place to
 normalise dictation before an agent sees it, stripping filler words for instance.
 
+## MCP server (`voxtype mcp`)
+
+Agent hosts that speak the Model Context Protocol (Claude Code, Hermes, Talos)
+can launch Voxtype as an MCP server. It is a build-time feature:
+
+```sh
+cargo build --release --features mcp
+```
+
+The server runs in the `voxtype mcp` process, talks JSON-RPC on stdin/stdout,
+and exits when stdin closes. Nothing listens on a socket or port, and the
+daemon is not modified. Logs go to stderr.
+
+```json
+{ "mcpServers": { "voxtype": { "command": "voxtype", "args": ["mcp"] } } }
+```
+
+| Tool | Arguments | Returns |
+|------|-----------|---------|
+| `status` | none | The `voxtype status --format json --extended` object, byte for byte. Needs `state_file` configured |
+| `transcribe_file` | `path`, optional `engine` | `{text, engine, duration_ms, speech}`. Same pipeline as `voxtype transcribe`: replacements, spoken punctuation, VAD. `speech` is false when VAD found none |
+
+A tool that fails (missing file, model not downloaded, `state_file` unset)
+returns a result with `isError: true` and the reason as text. The session
+continues.
+
+`transcribe_file` loads the model in the MCP process, not the daemon, so the
+first call pays model load time.
+
 ## What Voxtype will not do for you
 
 Voxtype does not edit your configuration, and asks that you not edit its own:
