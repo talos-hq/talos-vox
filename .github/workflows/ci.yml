@@ -106,7 +106,7 @@ jobs:
       - name: kernal-api capture tests
         run: soldr cargo test --features kernal-api --lib audio::kernal_capture
       - name: focus probe tests
-        run: soldr cargo test --features kernal-api --lib context::
+        run: 'soldr cargo test --features kernal-api --lib context::'
       - name: Windows hotkey tests
         if: runner.os == 'Windows'
         run: soldr cargo test --features kernal-api --lib hotkey_windows
