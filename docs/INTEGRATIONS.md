@@ -122,6 +122,30 @@ continues.
 `transcribe_file` loads the model in the MCP process, not the daemon, so the
 first call pays model load time.
 
+## Control socket protocol
+
+The daemon also answers on a local control socket,
+`$XDG_RUNTIME_DIR/voxtype/control.sock` (a named pipe of the same name on
+Windows). It is local only: a Unix socket in your runtime directory, with no
+network listener. Each request is one line, and each reply is one JSON line.
+
+Versioned requests (v1) are JSON objects. `id` is optional and is echoed back:
+
+```text
+> {"v":1,"cmd":"status","id":1}
+< {"id":1,"ok":true,"state":"idle","v":1}
+> {"v":2,"cmd":"status"}
+< {"error":"unsupported protocol version 2; this daemon speaks v1","ok":false,"v":1}
+```
+
+v1 commands are `start`, `stop` and `status`. The daemon applies a `start` or
+`stop` after it has replied, so the `state` in that reply can still show the
+previous state. Send `status` afterwards to see the new one.
+
+The original bare words `start`, `stop` and `status` are still accepted, and
+always will be. Their replies stay byte-for-byte what they were
+(`{"ok":true,"state":"idle"}`).
+
 ## What Voxtype will not do for you
 
 Voxtype does not edit your configuration, and asks that you not edit its own:

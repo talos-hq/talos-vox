@@ -75,6 +75,13 @@ fn record_start_stop_and_status_over_the_control_channel() {
     assert_eq!(ready["ok"], true, "status reply: {ready}");
     assert_eq!(ready["state"], "idle", "status reply: {ready}");
 
+    // The versioned dialect reaches the same daemon, and the legacy word
+    // still gets its old reply (the byte-level lock is in control.rs).
+    let v1 = control::request_v1(&socket, "status").unwrap();
+    assert_eq!(v1, serde_json::json!({"v": 1, "ok": true, "state": "idle"}));
+    let legacy = control::request(&socket, "status").unwrap();
+    assert_eq!(legacy.to_string(), r#"{"ok":true,"state":"idle"}"#);
+
     for request in ["start", "status", "stop", "status"] {
         let reply = control::request(&socket, request).unwrap();
         assert_eq!(reply["ok"], true, "{request} reply: {reply}");
