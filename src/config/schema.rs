@@ -42,6 +42,7 @@ pub const SECTIONS: &[&str] = &[
     "Text",
     "VAD",
     "Meeting",
+    "History",
     "Notifications",
     "OSD",
     "Status",
@@ -1136,6 +1137,35 @@ pub const CONFIG_KEYS: &[KeySpec] = &[
         "VAD",
         "Speech threshold",
         "Confidence required to call a recording speech. Higher rejects more.",
+    ),
+    // -- History ------------------------------------------------------------
+    // Ahead of the TUI: `voxtype configure` has no History page yet (#3 M2).
+    spec(
+        "history.enabled",
+        "history",
+        "enabled",
+        KeyType::Bool,
+        "History",
+        "Dictation history",
+        "Keep a local log of finished dictations for `voxtype history` and `voxtype paste-last`. Text only, never audio.",
+    ),
+    spec(
+        "history.retention_days",
+        "history",
+        "retention_days",
+        KeyType::Int { min: 0, max: 3650 },
+        "History",
+        "Retention (days)",
+        "Drop entries older than this. 0 keeps them until max_entries pushes them out.",
+    ),
+    spec(
+        "history.max_entries",
+        "history",
+        "max_entries",
+        KeyType::Int { min: 1, max: 100_000 },
+        "History",
+        "Maximum entries",
+        "Keep at most this many dictations, newest first.",
     ),
     // -- Meeting ------------------------------------------------------------
     spec(
@@ -2586,6 +2616,9 @@ pub fn resolve(key: &str, cfg: &Config) -> Option<Json> {
         "vad.threshold" => f32_json(cfg.vad.threshold),
 
         "meeting.enabled" => json!(cfg.meeting.enabled),
+        "history.enabled" => json!(cfg.history.enabled),
+        "history.retention_days" => json!(cfg.history.retention_days),
+        "history.max_entries" => json!(cfg.history.max_entries),
         "meeting.audio.loopback_device" => json!(cfg.meeting.audio.loopback_device),
         "meeting.audio.echo_cancel" => json!(cfg.meeting.audio.echo_cancel),
         "meeting.diarization.enabled" => json!(cfg.meeting.diarization.enabled),

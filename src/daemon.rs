@@ -3660,6 +3660,7 @@ impl Daemon {
 
                     // Track last dictation for context in subsequent post-processing
                     self.last_dictation = Some((final_text.clone(), Instant::now()));
+                    crate::history::record_dictation(&self.config, &final_text);
 
                     if smart_submit {
                         tracing::debug!(
@@ -4005,6 +4006,8 @@ impl Daemon {
         let mut sigterm = signal(SignalKind::terminate()).map_err(|e| {
             crate::error::VoxtypeError::Config(format!("Failed to set up SIGTERM handler: {}", e))
         })?;
+
+        crate::history::prune_on_start(&self.config);
 
         // The control channel feeds the same start/stop arms as the signals.
         let (start_tx, start_rx) = tokio::sync::mpsc::unbounded_channel();

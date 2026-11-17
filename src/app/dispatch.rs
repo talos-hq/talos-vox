@@ -468,6 +468,14 @@ pub(crate) async fn dispatch(
             check_for_updates().await?;
         }
 
+        Commands::History { action } => {
+            super::history::run_history(&config, action)?;
+        }
+
+        Commands::PasteLast => {
+            super::history::run_paste_last(&config).await?;
+        }
+
         #[cfg(feature = "mcp")]
         Commands::Mcp => {
             super::mcp::run_mcp(config, mcp_config_arg).await?;

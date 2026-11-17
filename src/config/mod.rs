@@ -9,6 +9,7 @@
 mod audio;
 mod default_config;
 mod engines;
+mod history;
 mod hotkey;
 mod language;
 mod load;
@@ -32,6 +33,7 @@ pub use engines::{
     ParaformerConfig, ParakeetConfig, ParakeetModelType, SenseVoiceConfig, SonioxConfig,
     TranscriptionEngine,
 };
+pub use history::HistoryConfig;
 pub use hotkey::{ActivationMode, HotkeyConfig};
 pub use language::LanguageConfig;
 pub use load::{load_config, save_config};
