@@ -28,7 +28,9 @@ jobs:
     # job-level env var or the step silently never runs.
     env:
       HAS_SIGNING_CERT: ${{ secrets.APPLE_DEVELOPER_ID_CERT != '' }}
-      HAS_NOTARY_CREDS: ${{ secrets.APPLE_ID != '' }}
+      # Notary credentials: the talos-hq naming (APPLE_NOTARY_USER/PASSWORD,
+      # an app-specific password) or upstream's APPLE_ID/APPLE_ID_PASSWORD.
+      HAS_NOTARY_CREDS: ${{ (secrets.APPLE_NOTARY_USER || secrets.APPLE_ID) != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -123,19 +125,23 @@ jobs:
             grep "Developer ID Application" | head -1 | \
             sed 's/.*"\(.*\)".*/\1/')
 
-          codesign --deep --force --verify --verbose \
+          # Hardened runtime blocks the microphone unless the binary carries
+          # com.apple.security.device.audio-input (macos/voxtype.entitlements).
+          codesign --force --verbose \
             --sign "$IDENTITY" \
             --timestamp \
             --options runtime \
+            --entitlements macos/voxtype.entitlements \
             "$BINARY"
 
           codesign --verify --strict --verbose=2 "$BINARY"
+          codesign -d --entitlements - --xml "$BINARY" | grep -q device.audio-input
 
       - name: Notarize binary
         if: env.HAS_NOTARY_CREDS == 'true'
         env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_NOTARY_USER || secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD || secrets.APPLE_ID_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           VERSION=${{ steps.version.outputs.version }}
@@ -167,18 +173,30 @@ jobs:
             grep "Developer ID Application" | head -1 | \
             sed 's/.*"\(.*\)".*/\1/')
 
-          # Inner code first, then the wrapper. build-macos-dmg.sh ad-hoc signs
-          # the inner binary so it runs unsigned locally; re-sign it here with
-          # the real identity before sealing the outer bundle.
+          # Inner code first, then the wrapper, each with its own entitlements.
+          # No --deep on the outer sign: it would re-sign every nested binary
+          # with the outer entitlements (or none), and the hardened runtime
+          # would then deny the microphone/Apple Events to whichever lost them.
           codesign --force --timestamp --options runtime \
             --sign "$IDENTITY" \
-            "$APP/Contents/MacOS/VoxtypeMenubar.app" \
+            "$APP/Contents/MacOS/VoxtypeMenubar.app"
+          codesign --force --timestamp --options runtime \
+            --sign "$IDENTITY" \
+            --entitlements macos/VoxtypeSetup/VoxtypeSetup.entitlements \
             "$APP/Contents/MacOS/VoxtypeSetup.app"
 
-          codesign --force --deep --timestamp --options runtime \
-            --sign "$IDENTITY" "$APP"
+          # Signing the bundle signs its main executable (voxtype-bin, the
+          # daemon) with the same identity, so TCC sees one responsible app.
+          codesign --force --timestamp --options runtime \
+            --sign "$IDENTITY" \
+            --entitlements macos/voxtype.entitlements \
+            "$APP"
 
           codesign --verify --strict --deep --verbose=2 "$APP"
+          codesign -d --entitlements - --xml "$APP/Contents/MacOS/voxtype-bin" \
+            | grep -q device.audio-input
+          codesign -d --entitlements - --xml "$APP/Contents/MacOS/VoxtypeSetup.app" \
+            | grep -q device.audio-input
 
       - name: Package DMG
         run: |
@@ -200,8 +218,8 @@ jobs:
       - name: Notarize and staple DMG
         if: env.HAS_NOTARY_CREDS == 'true'
         env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_NOTARY_USER || secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD || secrets.APPLE_ID_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           VERSION=${{ steps.version.outputs.version }}
@@ -217,6 +235,23 @@ jobs:
           # download work on a machine with no network path to Apple.
           xcrun stapler staple "$DMG"
           xcrun stapler validate "$DMG"
+
+      - name: Gatekeeper assessment
+        if: env.HAS_SIGNING_CERT == 'true'
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          APP=releases/${VERSION}/Voxtype.app
+          DMG=releases/${VERSION}/voxtype-${VERSION}-macos-universal.dmg
+          # Without notary credentials this reports "Unnotarized Developer ID"
+          # and is informational. With them, the stapled DMG must assess as
+          # "Notarized Developer ID" (#3 M5 acceptance).
+          spctl -a -vv "$APP" 2>&1 || true
+          if [[ "$HAS_NOTARY_CREDS" == "true" ]]; then
+            spctl -a -vv -t open --context context:primary-signature "$DMG" 2>&1 | tee spctl.txt
+            grep -q "Notarized Developer ID" spctl.txt
+          else
+            spctl -a -vv -t open --context context:primary-signature "$DMG" 2>&1 || true
+          fi
 
       - name: Generate checksums
         run: |
