@@ -105,6 +105,8 @@ jobs:
         run: soldr cargo check --features kernal-api --lib --keep-going
       - name: kernal-api capture tests
         run: soldr cargo test --features kernal-api --lib audio::kernal_capture
+      - name: focus probe tests
+        run: soldr cargo test --features kernal-api --lib context::
 
   # Aggregator job — branch protection only needs to require `ci-success`.
   # Adding/removing parallel checks above just updates the `needs:` list;
