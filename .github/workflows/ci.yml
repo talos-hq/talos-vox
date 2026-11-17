@@ -64,11 +64,12 @@ jobs:
       - name: cargo test
         run: cargo test
 
-  # Portability probe for the kernal-api rewrite: audio capture already goes through
-  # kernal-api on every OS; this shows what else still blocks a Windows/macOS build.
-  # Not in ci-success until it is green.
+  # Windows/macOS build gate: the library compiles on both through kernal-api
+  # (audio capture, control signals, local IPC, desktop input). Required by
+  # ci-success, so a change that breaks a non-Linux build cannot merge.
   kernal-api:
     name: kernal-api (${{ matrix.os }})
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -96,7 +97,7 @@ jobs:
   # the protection rule never needs to be touched.
   ci-success:
     name: ci-success
-    needs: [fmt, clippy, test]
+    needs: [fmt, clippy, test, kernal-api]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -106,10 +107,12 @@ jobs:
           fmt='${{ needs.fmt.result }}'
           clippy='${{ needs.clippy.result }}'
           test='${{ needs.test.result }}'
-          echo "fmt:    $fmt"
-          echo "clippy: $clippy"
-          echo "test:   $test"
-          if [[ "$fmt" != success || "$clippy" != success || "$test" != success ]]; then
+          kernal='${{ needs.kernal-api.result }}'
+          echo "fmt:        $fmt"
+          echo "clippy:     $clippy"
+          echo "test:       $test"
+          echo "kernal-api: $kernal"
+          if [[ "$fmt" != success || "$clippy" != success || "$test" != success || "$kernal" != success ]]; then
             echo "::error::One or more required jobs failed"
             exit 1
           fi
