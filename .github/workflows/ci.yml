@@ -164,9 +164,10 @@ jobs:
         run: soldr cargo test -p voxtype-app
       - name: build
         run: soldr cargo build -p voxtype-app
+      # `cargo run` finds the binary wherever soldr put the target dir
+      # (it isn't ./target/debug on the Windows runners).
       - name: run --version
-        shell: bash
-        run: target/debug/voxtype-app --version
+        run: soldr cargo run -p voxtype-app -- --version
 
   # Aggregator job: the dev ruleset requires only `ci-success` (through the
   # merge queue). Adding/removing parallel checks above just updates the
