@@ -22,6 +22,19 @@ use tokio::process::Command;
 use tokio::time::timeout;
 
 /// Post-processor that runs an external command on transcribed text
+/// Set `VOXTYPE_APP_ID` / `VOXTYPE_APP_TITLE` from `app`, removing any
+/// inherited values first so a missing snapshot always reads as unset.
+fn set_app_env(cmd: &mut Command, app: Option<&crate::context::AppContext>) {
+    cmd.env_remove("VOXTYPE_APP_ID");
+    cmd.env_remove("VOXTYPE_APP_TITLE");
+    if let Some(app) = app {
+        cmd.env("VOXTYPE_APP_ID", &app.app_id);
+        if let Some(title) = &app.title {
+            cmd.env("VOXTYPE_APP_TITLE", title);
+        }
+    }
+}
+
 pub struct PostProcessor {
     command: String,
     timeout: Duration,
@@ -97,6 +110,9 @@ impl PostProcessor {
         if let Some(ctx) = context {
             cmd.env("VOXTYPE_CONTEXT", ctx);
         }
+        // The app focused when the recording started (Hyprland/Sway only;
+        // unset elsewhere). Cleared first for the same reason as above.
+        set_app_env(&mut cmd, crate::context::captured().as_ref());
 
         let mut child = cmd
             .spawn()
@@ -413,5 +429,29 @@ mod tests {
         let result = processor.process_with_context("text", None).await;
         std::env::remove_var("VOXTYPE_CONTEXT");
         assert_eq!(result, "unset");
+    }
+
+    #[tokio::test]
+    async fn app_env_is_set_from_the_snapshot_and_cleared_without_one() {
+        let run = |app: Option<crate::context::AppContext>| async move {
+            let mut cmd = Command::new("sh");
+            cmd.arg("-c")
+                .arg("echo \"${VOXTYPE_APP_ID:-unset}|${VOXTYPE_APP_TITLE:-unset}\"")
+                .env("VOXTYPE_APP_ID", "inherited")
+                .env("VOXTYPE_APP_TITLE", "inherited")
+                .stdout(Stdio::piped());
+            set_app_env(&mut cmd, app.as_ref());
+            let out = cmd.output().await.unwrap();
+            String::from_utf8(out.stdout).unwrap().trim().to_string()
+        };
+        assert_eq!(run(None).await, "unset|unset");
+        let app = crate::context::AppContext {
+            app_id: "code".into(),
+            title: Some("main.rs - voxtype".into()),
+            source: "hyprland",
+        };
+        assert_eq!(run(Some(app.clone())).await, "code|main.rs - voxtype");
+        let untitled = crate::context::AppContext { title: None, ..app };
+        assert_eq!(run(Some(untitled)).await, "code|unset");
     }
 }

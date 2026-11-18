@@ -72,6 +72,7 @@ pub mod audio;
 pub mod cli;
 pub mod config;
 pub mod config_set;
+pub mod context;
 pub mod control;
 pub mod cpu;
 pub mod daemon;
