@@ -2,6 +2,11 @@
 //!
 //! Provides a system tray icon showing voxtype status with a context menu
 //! for controlling recording and configuring settings.
+//!
+//! `voxtype-app` (crates/voxtype-app) carries the cross-platform version of
+//! this tray (macOS, Windows, and Linux behind `linux-tray`), driven by the
+//! control protocol, plus a daemon supervisor. This module stays for
+//! `voxtype menubar` users.
 
 use crate::config::{ActivationMode, Config, OutputMode, TranscriptionEngine};
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};

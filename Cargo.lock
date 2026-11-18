@@ -7543,10 +7543,14 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "eframe",
+ "gtk",
+ "kernal-api",
+ "libc",
  "serde_json",
  "tempfile",
  "tokio",
  "toml_edit 0.22.27",
+ "tray-icon",
  "voxtype",
 ]
 
