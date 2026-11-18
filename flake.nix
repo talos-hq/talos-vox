@@ -45,7 +45,7 @@
             "openvino-genai-0.11.0" = "sha256-nQWeHNdLlRk+owh3B6VpArAG2dr66HeBI2RHfDhyvvU=";
             "openvino-genai-sys-0.11.0" = "sha256-nQWeHNdLlRk+owh3B6VpArAG2dr66HeBI2RHfDhyvvU=";
             "openvino-sys-0.11.0" = "sha256-nQWeHNdLlRk+owh3B6VpArAG2dr66HeBI2RHfDhyvvU=";
-            "whisper-rs-sys-0.15.0" = "sha256-L2Tmp3RmOKqNNOP3ymUQvqhcIvSRr6gHYY67foe5GM4=";
+            "whisper-rs-sys-0.15.0" = "sha256-FcP+w96LjR5ESUbxRq2+aclgpbsuIYHMGXpOyYNEJi8=";
           };
         };
 

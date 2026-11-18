@@ -24,6 +24,45 @@ const GPU_BUILD: bool = cfg!(any(
     feature = "gpu-hipblas"
 ));
 
+/// GPU memory that must still be free once a decoding state is allocated.
+///
+/// The patched whisper.cpp returns an error when the model, KV cache or
+/// compute buffers don't fit, but ggml-cuda also grows a memory pool while it
+/// computes, and aborts the process if that fails (`ggml-cuda.cu`
+/// `CUDA error: out of memory` in `cuMemCreate`); upstream does the same. On
+/// an RTX 2080 Ti with large-v3-turbo, inference aborted with about 80 MiB
+/// left after the state and ran with about 200 MiB. This is a heuristic: free
+/// memory can change between this check and the next inference.
+const GPU_HEADROOM_BYTES: usize = 256 << 20;
+
+/// Free memory on the GPU whisper.cpp runs on: the `gpu_device`-th GPU or
+/// iGPU in ggml's device list, as `whisper_backend_init_gpu` counts them.
+/// `None` if there's no such device or its backend doesn't report memory.
+fn gpu_free_bytes(gpu_device: i32) -> Option<usize> {
+    use whisper_rs::whisper_rs_sys as sys;
+    let mut nth = 0;
+    // SAFETY: read-only queries of ggml's global device registry, whose
+    // devices live for the whole process.
+    unsafe {
+        for i in 0..sys::ggml_backend_dev_count() {
+            let dev = sys::ggml_backend_dev_get(i);
+            let kind = sys::ggml_backend_dev_type(dev);
+            if kind != sys::ggml_backend_dev_type_GGML_BACKEND_DEVICE_TYPE_GPU
+                && kind != sys::ggml_backend_dev_type_GGML_BACKEND_DEVICE_TYPE_IGPU
+            {
+                continue;
+            }
+            if nth == gpu_device {
+                let (mut free, mut total) = (0usize, 0usize);
+                sys::ggml_backend_dev_memory(dev, &mut free, &mut total);
+                return (total > 0).then_some(free);
+            }
+            nth += 1;
+        }
+    }
+    None
+}
+
 /// How to load the model, kept so it can be reloaded on CPU.
 struct ModelLoad {
     path: String,
@@ -57,13 +96,32 @@ impl ModelLoad {
                  see the whisper.cpp log above for the allocation that failed"
             ))
         })?;
-        drop(ctx.create_state().map_err(|e| {
+        let state = ctx.create_state().map_err(|e| {
             TranscribeError::InitFailed(format!(
                 "whisper.cpp loaded the model on {where_} but could not allocate \
                  its decoding state ({e})"
             ))
-        })?);
+        })?;
+        if gpu {
+            self.check_gpu_headroom()
+                .map_err(TranscribeError::InitFailed)?;
+        }
+        drop(state);
         Ok(ctx)
+    }
+
+    /// With a decoding state allocated on the GPU, check that enough memory
+    /// is left for inference ([`GPU_HEADROOM_BYTES`]).
+    fn check_gpu_headroom(&self) -> Result<(), String> {
+        match gpu_free_bytes(self.gpu_device.unwrap_or(0)) {
+            Some(free) if free < GPU_HEADROOM_BYTES => Err(format!(
+                "only {} MiB of GPU memory is left after whisper.cpp's decoding \
+                 state, under the {} MiB that inference needs to run safely",
+                free >> 20,
+                GPU_HEADROOM_BYTES >> 20
+            )),
+            _ => Ok(()),
+        }
     }
 }
 
@@ -185,8 +243,12 @@ impl WhisperTranscriber {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let gpu_err = match model.ctx.create_state() {
-            Ok(state) => return Ok(state),
-            Err(e) if model.on_gpu => e,
+            Ok(state) if !model.on_gpu => return Ok(state),
+            Ok(state) => match self.load.check_gpu_headroom() {
+                Ok(()) => return Ok(state),
+                Err(e) => e,
+            },
+            Err(e) if model.on_gpu => e.to_string(),
             Err(e) => {
                 return Err(TranscribeError::InferenceFailed(format!(
                     "whisper.cpp could not allocate its decoding state ({e})"
