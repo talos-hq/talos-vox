@@ -7099,8 +7099,7 @@ dependencies = [
 [[package]]
 name = "whisper-rs-sys"
 version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6986c0fe081241d391f09b9a071fbcbb59720c3563628c3c829057cf69f2a56f"
+source = "git+https://github.com/talos-hq/whisper-rs-sys?rev=7132502862c95fc0413c3b62161e5fa68f2bdc90#7132502862c95fc0413c3b62161e5fa68f2bdc90"
 dependencies = [
  "bindgen",
  "cfg-if",

@@ -1,14 +1,16 @@
-//! CPU fallback for ONNX engines whose GPU provider can't initialise.
+//! CPU fallback for engines whose GPU backend can't initialise.
 //!
-//! A GPU provider can fail at model load even when the driver and runtime are
+//! A GPU backend can fail at model load even when the driver and runtime are
 //! present: on a nearly full device ONNX Runtime's BFC arena can't allocate,
 //! and with `CUDA_VISIBLE_DEVICES=-1` the CUDA EP registers and then fails in
 //! `cuda_call.cc`. Rather than exit, Parakeet retries the load on CPU and logs
 //! that it did. See talos-hq/talos-vox#4.
 //!
-//! Whisper can't use this yet: whisper.cpp aborts (`GGML_ASSERT(buffer)`)
-//! when the model buffer doesn't fit, and segfaults freeing a half-built
-//! state when the KV cache doesn't, so no error ever comes back to retry on.
+//! Whisper does the same. Stock whisper.cpp aborts (`GGML_ASSERT(buffer)`)
+//! when the model buffer doesn't fit and segfaults freeing a half-built state
+//! when the KV cache doesn't, so voxtype builds a patched copy
+//! (talos-hq/whisper-rs-sys, see `[patch.crates-io]` in Cargo.toml) that
+//! returns an error to retry on.
 
 use crate::error::TranscribeError;
 

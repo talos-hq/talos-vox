@@ -355,3 +355,13 @@ required-features = ["cohere"]
 # if needed) once that PR merges and ships in a crates.io release.
 [patch.crates-io]
 openvino-genai = { git = "https://github.com/voxtype/openvino-rs", branch = "whisper-pipeline-with-properties" }
+# whisper-rs-sys 0.15.0 with its vendored whisper.cpp patched so that running
+# out of GPU memory returns an error instead of aborting (GGML_ASSERT(buffer)
+# when the model doesn't fit) or segfaulting (freeing an uninitialised batch
+# when the KV cache doesn't), which lets Whisper fall back to CPU
+# (talos-hq/talos-vox#4). The repo is the crates.io release in its first
+# commit and the patch in the next; TALOS.md there says how to rebase it.
+# Upstream: ggml-org/whisper.cpp#4155 fixed the batch; the rest is on the
+# fix/oom-error-paths branch of talos-hq/whisper.cpp, not yet submitted. Drop
+# this once a whisper-rs-sys release carries both.
+whisper-rs-sys = { git = "https://github.com/talos-hq/whisper-rs-sys", rev = "7132502862c95fc0413c3b62161e5fa68f2bdc90" }
