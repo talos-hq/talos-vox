@@ -122,7 +122,7 @@ fn main() -> eframe::Result {
                 let (tx, rx) = std::sync::mpsc::channel();
                 let ctx = cc.egui_ctx.clone();
                 match tray::Tray::new(tx, move || ctx.request_repaint()) {
-                    Ok(t) => app = app.with_tray(t, rx),
+                    Ok(t) => app = app.with_tray(t, rx, window_can_hide(cc)),
                     Err(e) => eprintln!("voxtype-app: no tray icon ({e})"),
                 }
             }
@@ -143,6 +143,31 @@ fn main() -> eframe::Result {
             Ok(Box::new(app))
         }),
     )
+}
+
+/// Whether closing the window can hide it to the tray. winit can't hide a
+/// Wayland window (nor unminimize or focus it), so a hidden window could
+/// never come back; there closing quits as it does without a tray. macOS,
+/// Windows and X11 can.
+#[cfg(any(
+    target_os = "macos",
+    windows,
+    all(target_os = "linux", feature = "linux-tray")
+))]
+fn window_can_hide(cc: &eframe::CreationContext<'_>) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        !matches!(
+            cc.window_handle().map(|h| h.as_raw()),
+            Ok(RawWindowHandle::Wayland(_))
+        )
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = cc;
+        true
+    }
 }
 
 /// `voxtype-app --hud` as a child. It exits when its stdin (held here)

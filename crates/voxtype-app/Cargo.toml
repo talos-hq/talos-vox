@@ -27,7 +27,7 @@ default = []
 # The tray icon on Linux: needs GTK 3 and libayatana-appindicator3 at build
 # and run time, and a StatusNotifier host to show it. macOS and Windows
 # always get the tray.
-linux-tray = ["dep:tray-icon", "dep:gtk"]
+linux-tray = ["dep:tray-icon", "dep:gtk", "dep:raw-window-handle"]
 
 [target.'cfg(unix)'.dependencies]
 # SIGTERM to the supervised daemon, PR_SET_PDEATHSIG on Linux.
@@ -49,6 +49,8 @@ objc2-app-kit = { version = "0.3", default-features = false, features = ["std", 
 [target.'cfg(target_os = "linux")'.dependencies]
 tray-icon = { version = "0.21.3", default-features = false, optional = true }
 gtk = { version = "0.18", optional = true }
+# Whether the window is on Wayland, where it can't be hidden to the tray.
+raw-window-handle = { version = "0.6", optional = true }
 
 # The control channel on non-Unix hosts is a kernal-api named pipe.
 [target.'cfg(windows)'.dependencies]
