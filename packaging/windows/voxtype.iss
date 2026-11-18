@@ -26,6 +26,14 @@
   #define OutputDir "..\..\target\installer"
 #endif
 
+; VersionInfoVersion only takes numbers (up to four dotted fields), so a
+; prerelease tag's version (1.2.0-rc1, 0.0.0-ci-test) is cut at the "-".
+#if Pos("-", AppVersion) > 0
+  #define NumericVersion Copy(AppVersion, 1, Pos("-", AppVersion) - 1)
+#else
+  #define NumericVersion AppVersion
+#endif
+
 #define AppName "Voxtype"
 #define AppPublisher "Talos HQ"
 #define AppURL "https://github.com/talos-hq/talos-vox"
@@ -40,7 +48,7 @@ AppPublisher={#AppPublisher}
 AppPublisherURL={#AppURL}
 AppSupportURL={#AppURL}/issues
 AppUpdatesURL={#AppURL}/releases
-VersionInfoVersion={#AppVersion}
+VersionInfoVersion={#NumericVersion}
 DefaultDirName={localappdata}\Programs\Voxtype
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
