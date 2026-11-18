@@ -2780,9 +2780,13 @@ had focus when the recording started and passes it to the command:
   is never set on macOS, where reading titles needs Screen Recording
 
 The snapshot is taken at record start, so switching windows while a dictation
-is transcribed does not change it. On other desktops (GNOME and KDE on
-Wayland, and wlroots compositors other than Sway) both variables are unset. Run `voxtype context` (or `voxtype context --watch`) to
-see what your session reports. A script can branch on them, for example
+is transcribed does not change it. Hyprland and Sway are asked over their
+own IPC. Other Wayland compositors (river, labwc, Wayfire, niri and other
+wlroots-based ones) are asked over the `wlr-foreign-toplevel-management`
+protocol, for the window marked activated. On GNOME and KDE on Wayland, and
+on any compositor without that protocol, both variables are unset. Run
+`voxtype context` (or `voxtype context --watch`) to see what your session
+reports. A script can branch on them, for example
 to keep code identifiers verbatim:
 
 ```bash
@@ -2964,9 +2968,10 @@ started**. Switching windows while it transcribes does not change the result.
 The first matching entry wins. `voxtype record start --profile NAME` always
 overrides modes.
 
-Modes need a focus probe. Hyprland, Sway, X11, macOS and Windows have one.
-GNOME and KDE on Wayland expose no focus information to clients, so no mode
-ever matches there and every dictation uses the global settings, exactly as
+Modes need a focus probe. Hyprland, Sway, X11, macOS and Windows have one,
+and so does any Wayland compositor that offers `wlr-foreign-toplevel-management`
+(river, labwc, Wayfire, niri). GNOME and KDE on Wayland expose no focus
+information to clients, so no mode ever matches there and every dictation uses the global settings, exactly as
 before.
 
 ## [text]

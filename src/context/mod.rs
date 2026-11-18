@@ -10,11 +10,14 @@
 //! - Sway (`SWAYSOCK`): `swaymsg -t get_tree`, the focused node.
 //! - X11 sessions (`XDG_SESSION_TYPE=x11`, or `DISPLAY` without
 //!   `WAYLAND_DISPLAY`): `xprop` on `_NET_ACTIVE_WINDOW`.
+//! - Other Wayland sessions (river, labwc, Wayfire, niri, ...): the
+//!   activated toplevel from `wlr-foreign-toplevel-management`. A
+//!   compositor that does not offer that protocol reports no snapshot.
 //! - macOS: the frontmost app's bundle identifier (`lsappinfo`). No title.
 //! - Windows: the foreground window's exe stem and title (Win32).
 //!
-//! Everywhere else (GNOME and KDE on Wayland, which expose no focus
-//! protocol to clients) there is no snapshot: the variables are unset and
+//! GNOME and KDE on Wayland expose no focus protocol to clients, so they
+//! get no probe at all. Without a snapshot: the variables are unset and
 //! behaviour is exactly what it was before. `voxtype context` shows what
 //! this session reports.
 
@@ -22,6 +25,8 @@ mod hyprland;
 mod macos;
 mod sway;
 mod windows;
+#[cfg(unix)]
+mod wlr;
 mod x11;
 
 use std::process::{Command, Stdio};
@@ -38,7 +43,8 @@ pub struct AppContext {
     pub app_id: String,
     /// Window title, when the compositor reports one.
     pub title: Option<String>,
-    /// Which probe produced this (`hyprland`, `sway`).
+    /// Which probe produced this (`hyprland`, `sway`,
+    /// `wlr-foreign-toplevel`, ...).
     pub source: &'static str,
 }
 
@@ -104,6 +110,8 @@ pub struct Session {
     pub wayland: bool,
     pub x11_display: bool,
     pub session_type: Option<String>,
+    /// `XDG_CURRENT_DESKTOP`, e.g. `KDE`, `GNOME`, `sway:wlroots`.
+    pub desktop: Option<String>,
 }
 
 impl Session {
@@ -115,6 +123,7 @@ impl Session {
             wayland: set("WAYLAND_DISPLAY"),
             x11_display: set("DISPLAY"),
             session_type: std::env::var("XDG_SESSION_TYPE").ok(),
+            desktop: std::env::var("XDG_CURRENT_DESKTOP").ok(),
         }
     }
 }
@@ -132,7 +141,26 @@ pub fn probe_for(session: &Session) -> Option<Box<dyn FocusProbe>> {
     if x11 {
         return Some(Box::new(x11::X11));
     }
+    #[cfg(unix)]
+    if session.wayland && !session.focus_protocol_missing() {
+        return Some(Box::new(wlr::Wlr));
+    }
     None
+}
+
+impl Session {
+    /// Desktops known not to implement `wlr-foreign-toplevel-management`.
+    /// Skipping them saves a compositor round trip per recording and keeps
+    /// `voxtype context` reporting no probe there. Any other Wayland
+    /// compositor is asked, and one without the protocol degrades to no
+    /// snapshot.
+    fn focus_protocol_missing(&self) -> bool {
+        const WITHOUT: [&str; 6] = ["GNOME", "KDE", "UNITY", "PANTHEON", "BUDGIE", "CINNAMON"];
+        self.desktop.as_deref().is_some_and(|d| {
+            d.split(':')
+                .any(|d| WITHOUT.iter().any(|w| d.eq_ignore_ascii_case(w)))
+        })
+    }
 }
 
 /// The probe for the current session, if any.
@@ -216,7 +244,27 @@ mod tests {
             session_type: Some("wayland".into()),
             ..Session::default()
         };
+        // Any other Wayland session is asked over the wlr protocol (Unix
+        // only: the probe speaks to a Unix socket).
+        let wlr = cfg!(unix).then_some("wlr-foreign-toplevel");
+        assert_eq!(pick(kde.clone()), wlr);
+        let kde = Session {
+            desktop: Some("KDE".into()),
+            ..kde
+        };
         assert_eq!(pick(kde), None);
+        let gnome = Session {
+            wayland: true,
+            desktop: Some("ubuntu:GNOME".into()),
+            ..Session::default()
+        };
+        assert_eq!(pick(gnome), None);
+        let river = Session {
+            wayland: true,
+            desktop: Some("river".into()),
+            ..Session::default()
+        };
+        assert_eq!(pick(river), wlr);
         // A bare X server without logind's session type.
         let bare = Session {
             x11_display: true,
