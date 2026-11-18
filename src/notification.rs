@@ -4,6 +4,7 @@
 //! different platforms:
 //! - Linux: Uses notify-send (libnotify)
 //! - macOS: Uses terminal-notifier with engine-specific icons
+//! - Windows: a WinRT toast posted through Windows PowerShell
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::process::Stdio;
@@ -74,7 +75,13 @@ pub async fn send_with_engine(title: &str, body: &str, engine: Option<Transcript
     #[cfg(target_os = "macos")]
     send_macos_native(title, body, engine);
 
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(windows)]
+    {
+        let _ = engine;
+        windows_toast::show(title, body);
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         tracing::debug!("Notifications not supported on this platform");
         let _ = (title, body, engine); // Suppress unused warnings
@@ -377,9 +384,79 @@ pub fn send_sync_with_engine(title: &str, body: &str, engine: Option<Transcripti
     #[cfg(target_os = "macos")]
     send_macos_native(title, body, engine);
 
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(windows)]
+    {
+        let _ = engine;
+        windows_toast::show(title, body);
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         let _ = (title, body, engine); // Suppress unused warnings
+    }
+}
+
+/// Windows toasts. Windows PowerShell 5.1 (always present, unlike `pwsh`)
+/// can load the WinRT `ToastNotificationManager` without any crate or COM
+/// registration of our own. Title and body travel in environment variables
+/// and are XML-escaped inside the script, so nothing user-controlled is ever
+/// spliced into the command line. Every toast carries the same tag/group,
+/// so a new one replaces the last, the single-slot behaviour Linux gets from
+/// `--replace-id`.
+#[cfg(any(windows, test))]
+mod windows_toast {
+    /// Posting through PowerShell's own AppUserModelID needs no Start-menu
+    /// shortcut; the installer (M5b) can register a voxtype AUMID later.
+    pub(super) const SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
+[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] > $null
+$t = [Security.SecurityElement]::Escape($env:VOXTYPE_TOAST_TITLE)
+$b = [Security.SecurityElement]::Escape($env:VOXTYPE_TOAST_BODY)
+$x = New-Object Windows.Data.Xml.Dom.XmlDocument
+$x.LoadXml("<toast><visual><binding template=`"ToastGeneric`"><text>$t</text><text>$b</text></binding></visual><audio silent=`"true`"/></toast>")
+$n = [Windows.UI.Notifications.ToastNotification]::new($x)
+$n.Tag = 'voxtype'
+$n.Group = 'voxtype'
+$n.ExpirationTime = [DateTimeOffset]::Now.AddSeconds(10)
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe').Show($n)
+"#;
+
+    #[cfg(windows)]
+    pub(super) fn command(title: &str, body: &str) -> std::process::Command {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut cmd = std::process::Command::new("powershell.exe");
+        cmd.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            SCRIPT,
+        ])
+        .env("VOXTYPE_TOAST_TITLE", title)
+        .env("VOXTYPE_TOAST_BODY", body)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .creation_flags(CREATE_NO_WINDOW);
+        cmd
+    }
+
+    /// Fire and forget on a background thread: PowerShell takes a few
+    /// hundred milliseconds to start, which no caller should wait for.
+    #[cfg(windows)]
+    pub(super) fn show(title: &str, body: &str) {
+        let mut cmd = command(title, body);
+        std::thread::spawn(move || match cmd.output() {
+            Ok(out) if out.status.success() => {}
+            Ok(out) => tracing::debug!(
+                "toast failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ),
+            Err(e) => tracing::debug!("toast failed to start powershell: {e}"),
+        });
     }
 }
 
@@ -516,5 +593,34 @@ mod tests {
         let title = r#"Test "title""#;
         let escaped = title.replace('"', "\\\"");
         assert_eq!(escaped, r#"Test \"title\""#);
+    }
+}
+
+#[cfg(test)]
+mod windows_toast_tests {
+    use super::windows_toast::SCRIPT;
+
+    /// Text reaches the toast only through escaped environment variables.
+    #[test]
+    fn toast_script_takes_text_from_escaped_env() {
+        assert!(SCRIPT.contains("Escape($env:VOXTYPE_TOAST_TITLE)"));
+        assert!(SCRIPT.contains("Escape($env:VOXTYPE_TOAST_BODY)"));
+        assert!(SCRIPT.contains("$n.Tag = 'voxtype'"));
+        assert!(SCRIPT.contains(r"\WindowsPowerShell\v1.0\powershell.exe"));
+        assert!(!SCRIPT.chars().any(|c| c.is_control() && c != '\n'));
+    }
+
+    /// On the Windows CI runner the script really posts a toast.
+    #[cfg(windows)]
+    #[test]
+    fn windows_toast_posts() {
+        let out = super::windows_toast::command("voxtype test", "<b>&'\"")
+            .output()
+            .expect("powershell runs");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 }
