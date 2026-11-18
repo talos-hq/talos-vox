@@ -151,7 +151,8 @@ fn open_log(path: &Path) -> std::io::Result<std::fs::File> {
     OpenOptions::new().create(true).append(true).open(path)
 }
 
-fn default_daemon_binary() -> PathBuf {
+/// The `voxtype` binary next to this executable, else the one on `PATH`.
+pub fn default_daemon_binary() -> PathBuf {
     let name = if cfg!(windows) {
         "voxtype.exe"
     } else {
@@ -162,6 +163,12 @@ fn default_daemon_binary() -> PathBuf {
         .and_then(|exe| exe.parent().map(|dir| dir.join(name)))
         .filter(|p| p.is_file())
         .unwrap_or_else(|| PathBuf::from(name))
+}
+
+/// Platform setup for a child voxtype process (no console window on
+/// Windows; SIGTERM if the app dies, on Linux).
+pub fn prepare_child(cmd: &mut Command) {
+    platform::prepare(cmd);
 }
 
 /// Is a daemon running that this supervisor did not start? Asks the

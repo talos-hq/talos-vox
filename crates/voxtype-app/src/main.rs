@@ -11,6 +11,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod client;
+mod models;
 mod modes;
 mod settings;
 mod supervisor;
@@ -34,10 +35,10 @@ fn main() -> eframe::Result {
         println!(
             "voxtype-app {}: desktop app for the voxtype daemon\n\n\
              Usage: voxtype-app [OPTIONS]\n\n\
-             --tab NAME         open on this tab: home, settings or modes\n\
+             --tab NAME         open on this tab: home, settings, modes or models\n\
              --no-tray          no tray icon\n\
              --no-supervise     never start, restart or stop the daemon\n\
-             --daemon-bin PATH  the voxtype binary to run as the daemon\n\
+             --daemon-bin PATH  the voxtype binary for the daemon and downloads\n\
              \x20                  (default: next to this app, else PATH)\n\
              -V, --version\n\
              -h, --help",
@@ -50,7 +51,7 @@ fn main() -> eframe::Result {
         Some(i) => match args.get(i + 1).and_then(|t| ui::Tab::parse(t)) {
             Some(tab) => tab,
             None => {
-                eprintln!("voxtype-app: --tab takes home, settings or modes");
+                eprintln!("voxtype-app: --tab takes home, settings, modes or models");
                 std::process::exit(2);
             }
         },
@@ -82,6 +83,9 @@ fn main() -> eframe::Result {
             let ctx = cc.egui_ctx.clone();
             let worker =
                 client::Worker::spawn(client::Local::from_config(), move || ctx.request_repaint());
+            let voxtype_bin = daemon_bin
+                .clone()
+                .unwrap_or_else(supervisor::default_daemon_binary);
             let supervisor = if supervise {
                 let ctx = cc.egui_ctx.clone();
                 supervisor::Supervisor::spawn(
@@ -100,6 +104,7 @@ fn main() -> eframe::Result {
                 voxtype::config::Config::default_path(),
             )
             .with_tab(tab)
+            .with_voxtype(voxtype_bin)
             .with_supervisor(supervisor);
             #[cfg(any(
                 target_os = "macos",
