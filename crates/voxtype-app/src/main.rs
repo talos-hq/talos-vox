@@ -10,15 +10,39 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod client;
+mod modes;
+mod settings;
 mod ui;
 
 use eframe::egui;
 
 fn main() -> eframe::Result {
-    if std::env::args().any(|a| a == "--version" || a == "-V") {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--version" || a == "-V") {
         println!("voxtype-app {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!(
+            "voxtype-app {}: desktop app for the voxtype daemon\n\n\
+             Usage: voxtype-app [--tab home|settings|modes]\n\n\
+             --tab NAME   open on this tab (default: home)\n\
+             -V, --version\n\
+             -h, --help",
+            env!("CARGO_PKG_VERSION")
+        );
+        return Ok(());
+    }
+    let tab = match args.iter().position(|a| a == "--tab") {
+        None => ui::Tab::Home,
+        Some(i) => match args.get(i + 1).and_then(|t| ui::Tab::parse(t)) {
+            Some(tab) => tab,
+            None => {
+                eprintln!("voxtype-app: --tab takes home, settings or modes");
+                std::process::exit(2);
+            }
+        },
+    };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Voxtype")
@@ -34,7 +58,14 @@ fn main() -> eframe::Result {
             let ctx = cc.egui_ctx.clone();
             let worker =
                 client::Worker::spawn(client::Local::from_config(), move || ctx.request_repaint());
-            Ok(Box::new(ui::App::new(worker.requests, worker.snapshots)))
+            Ok(Box::new(
+                ui::App::new(
+                    worker.requests,
+                    worker.snapshots,
+                    voxtype::config::Config::default_path(),
+                )
+                .with_tab(tab),
+            ))
         }),
     )
 }

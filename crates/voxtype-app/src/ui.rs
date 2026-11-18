@@ -1,29 +1,70 @@
-//! The main window: daemon state, start/stop, and the history list.
+//! The main window: a Home tab (daemon state, start/stop, history), and
+//! the Settings and Modes editors.
 
+use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
 
 use eframe::egui;
 
 use crate::client::{DaemonState, History, Request, Snapshot};
+use crate::modes::Modes;
+use crate::settings::Settings;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tab {
+    Home,
+    Settings,
+    Modes,
+}
+
+impl Tab {
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "home" => Some(Tab::Home),
+            "settings" => Some(Tab::Settings),
+            "modes" => Some(Tab::Modes),
+            _ => None,
+        }
+    }
+}
 
 pub struct App {
     requests: Sender<Request>,
     snapshots: Receiver<Snapshot>,
     snap: Snapshot,
+    tab: Tab,
+    /// The config file the editors write; `None` when no config dir exists.
+    config_path: Option<PathBuf>,
+    // Loaded when their tab is first opened.
+    settings: Option<Settings>,
+    modes: Option<Modes>,
 }
 
 impl App {
-    pub fn new(requests: Sender<Request>, snapshots: Receiver<Snapshot>) -> Self {
+    pub fn new(
+        requests: Sender<Request>,
+        snapshots: Receiver<Snapshot>,
+        config_path: Option<PathBuf>,
+    ) -> Self {
         Self {
             requests,
             snapshots,
             snap: Snapshot::default(),
+            tab: Tab::Home,
+            config_path,
+            settings: None,
+            modes: None,
         }
     }
 
     fn send(&self, req: Request) {
         // The worker only stops when the app does.
         let _ = self.requests.send(req);
+    }
+
+    pub fn with_tab(mut self, tab: Tab) -> Self {
+        self.tab = tab;
+        self
     }
 
     /// Take the worker's latest snapshot, if any.
@@ -38,6 +79,36 @@ impl App {
     pub fn show(&mut self, ui: &mut egui::Ui) {
         self.drain();
 
+        egui::Panel::top("tabs").show_inside(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.tab, Tab::Home, "Home");
+                ui.selectable_value(&mut self.tab, Tab::Settings, "Settings");
+                ui.selectable_value(&mut self.tab, Tab::Modes, "Modes");
+            });
+        });
+        let Some(path) = self.config_path.clone() else {
+            if self.tab != Tab::Home {
+                egui::CentralPanel::default().show_inside(ui, |ui| {
+                    ui.label("No config directory on this system; settings cannot be saved.");
+                });
+                return;
+            }
+            return self.home(ui);
+        };
+        match self.tab {
+            Tab::Home => self.home(ui),
+            Tab::Settings => self
+                .settings
+                .get_or_insert_with(|| Settings::new(path))
+                .show(ui),
+            Tab::Modes => {
+                let modes = self.modes.get_or_insert_with(|| Modes::new(path));
+                egui::CentralPanel::default().show_inside(ui, |ui| modes.show(ui));
+            }
+        }
+    }
+
+    fn home(&mut self, ui: &mut egui::Ui) {
         egui::Panel::top("status").show_inside(ui, |ui| {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -161,7 +232,8 @@ mod tests {
     fn renders_every_state_headless() {
         let (req_tx, _req_rx) = mpsc::channel();
         let (snap_tx, snap_rx) = mpsc::channel();
-        let mut app = App::new(req_tx, snap_rx);
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(req_tx, snap_rx, Some(dir.path().join("config.toml")));
         frame(&mut app);
         let entry = Entry {
             id: 1,
@@ -198,6 +270,19 @@ mod tests {
             frame(&mut app);
             assert_eq!(app.snap.daemon, daemon);
         }
+        for tab in [Tab::Settings, Tab::Modes, Tab::Home] {
+            app.tab = tab;
+            frame(&mut app);
+        }
+        assert!(app.settings.is_some() && app.modes.is_some());
+    }
+
+    #[test]
+    fn tab_names() {
+        assert_eq!(Tab::parse("settings"), Some(Tab::Settings));
+        assert_eq!(Tab::parse("modes"), Some(Tab::Modes));
+        assert_eq!(Tab::parse("home"), Some(Tab::Home));
+        assert_eq!(Tab::parse("nope"), None);
     }
 
     #[test]
