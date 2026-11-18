@@ -22,6 +22,17 @@ pub enum SetupAction {
         status: bool,
     },
 
+    /// Start voxtype at login (Windows: the per-user Run key, no admin needed)
+    Autostart {
+        /// Remove the login item instead of installing it
+        #[arg(long)]
+        uninstall: bool,
+
+        /// Show whether the login item is installed
+        #[arg(long)]
+        status: bool,
+    },
+
     /// Install voxtype as a LaunchAgent (macOS)
     /// Note: launchd services don't receive microphone permissions.
     /// Use 'app-bundle' instead for full functionality.

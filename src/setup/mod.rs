@@ -32,6 +32,7 @@ pub mod systemd;
 pub mod vad;
 pub mod variant_check;
 pub mod waybar;
+pub mod windows_autostart;
 
 use crate::config::Config;
 use std::path::Path;
