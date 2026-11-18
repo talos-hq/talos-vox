@@ -115,6 +115,9 @@ jobs:
       - name: Windows toast tests
         if: runner.os == 'Windows'
         run: soldr cargo test --features kernal-api --lib windows_toast
+      - name: Windows clipboard tests
+        if: runner.os == 'Windows'
+        run: soldr cargo test --features kernal-api --lib windows_clipboard
 
   # Aggregator job: the dev ruleset requires only `ci-success` (through the
   # merge queue). Adding/removing parallel checks above just updates the
