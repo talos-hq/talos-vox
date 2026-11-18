@@ -61,6 +61,11 @@ pub struct App {
         all(target_os = "linux", feature = "linux-tray")
     ))]
     tray: Option<(tray::Tray, Receiver<tray::Action>)>,
+    /// Closing the window hides it to the tray instead of quitting. Set by
+    /// `with_tray`, unless the window system can't hide a window (Wayland).
+    hide_on_close: bool,
+    /// The tray's Quit was clicked: let the next close through.
+    quitting: bool,
 }
 
 impl App {
@@ -87,6 +92,8 @@ impl App {
                 all(target_os = "linux", feature = "linux-tray")
             ))]
             tray: None,
+            hide_on_close: false,
+            quitting: false,
         }
     }
 
@@ -110,8 +117,17 @@ impl App {
         windows,
         all(target_os = "linux", feature = "linux-tray")
     ))]
-    pub fn with_tray(mut self, tray: tray::Tray, actions: Receiver<tray::Action>) -> Self {
+    /// Show the tray. With `window_can_hide`, closing the window then hides
+    /// it to the tray, and only the tray's Quit quits. winit can neither
+    /// hide nor re-show a Wayland window, so there closing still quits.
+    pub fn with_tray(
+        mut self,
+        tray: tray::Tray,
+        actions: Receiver<tray::Action>,
+        window_can_hide: bool,
+    ) -> Self {
         self.tray = Some((tray, actions));
+        self.hide_on_close = window_can_hide;
         self
     }
 
@@ -125,6 +141,7 @@ impl App {
         let Some((tray, actions)) = &mut self.tray else {
             return;
         };
+        let mut quit = false;
         while let Ok(action) = actions.try_recv() {
             match action {
                 tray::Action::Toggle => match recording(&self.snap.daemon) {
@@ -142,10 +159,39 @@ impl App {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 }
                 tray::Action::RestartDaemon => self.supervisor.restart(),
-                tray::Action::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                tray::Action::Quit => quit = true,
             }
         }
         tray.update(tray_view(&self.snap.daemon, &self.supervisor.status()));
+        if quit {
+            self.quit(ctx);
+        }
+    }
+
+    /// Close the window and let the close through: the tray's Quit.
+    #[cfg_attr(
+        not(any(
+            target_os = "macos",
+            windows,
+            all(target_os = "linux", feature = "linux-tray")
+        )),
+        allow(dead_code)
+    )]
+    fn quit(&mut self, ctx: &egui::Context) {
+        self.quitting = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
+    /// A close request (the window's close button, Alt+F4, Cmd+W) hides the
+    /// window when the tray is up; the tray's "Open Voxtype" shows it again.
+    /// With no tray, or after the tray's Quit, the close goes through and
+    /// the app exits.
+    fn handle_close(&mut self, ctx: &egui::Context) {
+        if !ctx.input(|i| i.viewport().close_requested()) || self.quitting || !self.hide_on_close {
+            return;
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
     }
 
     fn send(&self, req: Request) {
@@ -175,6 +221,7 @@ impl App {
             all(target_os = "linux", feature = "linux-tray")
         ))]
         self.sync_tray(&ui.ctx().clone());
+        self.handle_close(&ui.ctx().clone());
 
         egui::Panel::top("tabs").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
@@ -324,8 +371,8 @@ impl eframe::App for App {
         }
     }
 
-    /// Quit (window close or the tray's Quit): stop the daemon if this app
-    /// started it.
+    /// Quit (the tray's Quit, or closing the window when there is no tray):
+    /// stop the daemon if this app started it.
     fn on_exit(&mut self) {
         if let Some(mut hud) = self.hud.take() {
             let _ = hud.kill();
@@ -489,6 +536,67 @@ mod tests {
         assert_eq!(v.light, tray::Light::Down);
         assert_eq!(v.recording, None);
         assert!(!v.can_restart);
+    }
+
+    /// One frame with a close request on the root viewport; returns the
+    /// viewport commands the app sent.
+    fn close_frame(app: &mut App) -> Vec<egui::ViewportCommand> {
+        let ctx = egui::Context::default();
+        let mut input = egui::RawInput::default();
+        input.viewports.insert(
+            egui::ViewportId::ROOT,
+            egui::ViewportInfo {
+                events: vec![egui::ViewportEvent::Close],
+                ..Default::default()
+            },
+        );
+        let out = ctx.run_ui(input, |ui| app.show(ui));
+        out.viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .map(|v| v.commands.clone())
+            .unwrap_or_default()
+    }
+
+    fn bare_app() -> App {
+        let (req_tx, _req_rx) = mpsc::channel();
+        let (_snap_tx, snap_rx) = mpsc::channel();
+        App::new(req_tx, snap_rx, None)
+    }
+
+    #[test]
+    fn close_hides_to_tray_and_quit_still_quits() {
+        use egui::ViewportCommand as C;
+        // No tray (Linux without linux-tray, --no-tray, or the tray failed):
+        // the close goes through and the app exits.
+        let mut app = bare_app();
+        let cmds = close_frame(&mut app);
+        assert!(!cmds.contains(&C::CancelClose), "{cmds:?}");
+        assert!(!cmds.contains(&C::Visible(false)), "{cmds:?}");
+
+        // Tray up: the close is cancelled and the window hidden.
+        let mut app = bare_app();
+        app.hide_on_close = true;
+        let cmds = close_frame(&mut app);
+        assert!(cmds.contains(&C::CancelClose), "{cmds:?}");
+        assert!(cmds.contains(&C::Visible(false)), "{cmds:?}");
+        // A frame without a close request leaves the window alone.
+        let ctx = egui::Context::default();
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| app.show(ui));
+        let cmds = out
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .map(|v| v.commands.clone())
+            .unwrap_or_default();
+        assert!(!cmds.contains(&C::CancelClose), "{cmds:?}");
+
+        // The tray's Quit closes the window, and that close goes through.
+        let ctx = egui::Context::default();
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| app.quit(ui.ctx()));
+        assert!(out.viewport_output[&egui::ViewportId::ROOT]
+            .commands
+            .contains(&C::Close));
+        let cmds = close_frame(&mut app);
+        assert!(!cmds.contains(&C::CancelClose), "{cmds:?}");
     }
 
     #[test]
