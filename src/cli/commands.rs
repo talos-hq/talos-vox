@@ -191,7 +191,7 @@ pub enum Commands {
     /// Show which application has focus, as voxtype sees it
     ///
     /// Prints one JSON object: the probe this session uses (hyprland, sway,
-    /// x11 or macos; null where none applies, such as GNOME/KDE
+    /// x11, macos or windows; null where none applies, such as GNOME/KDE
     /// on Wayland) and the focused app_id and title. This is what
     /// VOXTYPE_APP_ID / VOXTYPE_APP_TITLE and [[modes]] see at record start.
     Context {
