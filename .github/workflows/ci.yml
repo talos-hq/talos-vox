@@ -3,6 +3,12 @@ name: CI
 on:
   push:
     branches: [main, dev]
+    # Release tags (the same patterns as build-linux.yml / build-macos.yml)
+    # run CI too, so windows-installer builds the tag's installer and
+    # windows-release attaches it to the GitHub release.
+    tags:
+      - 'v*.*.*'
+      - 'v*.*.*-rc*'
   pull_request:
   # dev merges through a merge queue; the queue waits for `ci-success` on the
   # merge_group run before it lands a group.
@@ -186,7 +192,9 @@ jobs:
 
   # Windows release build + per-user Inno Setup installer (M5b), uploaded as
   # an artifact on every run, after a silent install / --version /
-  # uninstall round trip on the runner.
+  # uninstall round trip on the runner. On a v* tag push the installer is
+  # named after the tag, and windows-release below attaches it to the
+  # GitHub release.
   #
   # Authenticode signing goes through Azure Artifact Signing over OIDC (no
   # client secret), as talos-hq/talos does: azure/login with the org's
@@ -206,6 +214,8 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     env:
       HAS_AZURE_SIGNING: ${{ secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_TENANT_ID != '' && secrets.AZURE_SIGNING_ENDPOINT != '' && secrets.AZURE_SIGNING_ACCOUNT != '' && secrets.AZURE_SIGNING_PROFILE != '' }}
       TRY_SIGNING: ${{ github.event_name == 'push' }}
@@ -226,7 +236,14 @@ jobs:
         id: version
         shell: bash
         run: |
-          v=$(grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)
+          # A tag build is named after the tag, as the macOS and Linux
+          # release builds are, so package-manifests finds
+          # voxtype-<tag version>-windows-x64-setup.exe on the release.
+          if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/tags/v* ]]; then
+            v="${GITHUB_REF_NAME#v}"
+          else
+            v=$(grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)
+          fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "Version: $v"
       - name: Build voxtype and voxtype-app (release)
@@ -369,6 +386,56 @@ jobs:
           path: dist/voxtype-${{ steps.version.outputs.version }}-windows-x64-setup.exe
           if-no-files-found: error
           retention-days: 14
+
+  # Tag pushes only: attach the installer from windows-installer to the
+  # tag's GitHub release, with SHA256SUMS-windows.txt (namespaced like
+  # SHA256SUMS-macos.txt). build-linux.yml and build-macos.yml upload to
+  # the same release, and whichever workflow gets there first creates it.
+  # A tag with a "-" (v1.2.0-rc1) makes a prerelease, the same rule as
+  # those two, so it never becomes "latest". build-macos.yml's
+  # package-manifests waits for this job and renders the WinGet manifest
+  # from the uploaded installer.
+  #
+  # A separate job so that only this short step, never the build, holds
+  # `contents: write`.
+  windows-release:
+    name: windows-release
+    needs: windows-installer
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.windows-installer.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: voxtype-${{ needs.windows-installer.outputs.version }}-windows-x64-setup
+          path: dist
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum "voxtype-${VERSION}-windows-x64-setup.exe" > SHA256SUMS-windows.txt
+          cat SHA256SUMS-windows.txt
+      - name: Upload to the release
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            flags=()
+            if [[ "$TAG" == *-* ]]; then flags+=(--prerelease); fi
+            # Losing the creation race to build-linux/build-macos is fine:
+            # the release then exists and the upload below goes to it.
+            gh release create "$TAG" --verify-tag --title "$TAG" --notes "" "${flags[@]}" \
+              || gh release view "$TAG" > /dev/null
+          fi
+          gh release upload "$TAG" --clobber \
+            "dist/voxtype-${VERSION}-windows-x64-setup.exe" dist/SHA256SUMS-windows.txt
+          gh release view "$TAG" --json assets --jq '.assets[].name'
 
   # Aggregator job: the dev ruleset requires only `ci-success` (through the
   # merge queue). Adding/removing parallel checks above just updates the

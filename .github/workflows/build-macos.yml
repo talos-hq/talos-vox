@@ -282,14 +282,17 @@ jobs:
           # marks "latest". This step racing ahead of Build Linux on the
           # v1.1.0-rc2 tag published an RC as the latest release. Every
           # workflow that can create the release must set this.
-          prerelease: ${{ contains(github.ref_name, '-rc') }}
+          # Any "-" suffix (v1.2.0-rc1, v0.0.0-ci-test) is a prerelease; ci.yml's
+          # windows-release and build-linux.yml use the same rule.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             releases/${{ steps.version.outputs.version }}/voxtype-*
             releases/${{ steps.version.outputs.version }}/SHA256SUMS-macos.txt
 
   # Homebrew cask + WinGet manifest (M5c). Fills the templates in
   # packaging/homebrew-tap/ and packaging/winget/ from this run's DMG and,
-  # on a tag whose release has one, the Windows installer. Then validates
+  # on a tag, the Windows installer that ci.yml's windows-release job
+  # attaches to the release (it waits for that run). Then validates
   # them: `brew style` + `brew audit --cask --strict` (Homebrew is on the
   # Ubuntu runner) and Microsoft's JSON schema for each WinGet file.
   #
@@ -301,7 +304,11 @@ jobs:
     name: package-manifests
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Up to 75 minutes of that is waiting for ci.yml's Windows installer.
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
     env:
       VERSION: ${{ needs.build.outputs.version }}
     steps:
@@ -318,15 +325,48 @@ jobs:
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          # Uploaded by the Windows signing job (M5b) once that exists. Until
-          # then the release has no installer and only the cask is rendered.
-          if gh release download "v${VERSION}" --repo "$GITHUB_REPOSITORY" \
-              --pattern "voxtype-${VERSION}-windows-x64-setup.exe" --dir artifacts; then
-            echo "installer=artifacts/voxtype-${VERSION}-windows-x64-setup.exe" >> "$GITHUB_OUTPUT"
+          # ci.yml runs on the same tag push: windows-installer builds
+          # voxtype-<version>-windows-x64-setup.exe and windows-release
+          # uploads it here. That run usually finishes after this job
+          # starts, so wait for it: until the installer is on the release,
+          # or that run has completed without it (then only the cask is
+          # rendered), or 75 minutes pass. If no ci.yml run for this tag
+          # shows up within 10 minutes (a tag cut before ci.yml ran on
+          # tags), stop waiting.
+          asset="voxtype-${VERSION}-windows-x64-setup.exe"
+          fetch() {
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --pattern "$asset" --dir artifacts --clobber > /dev/null 2>&1
+          }
+          ci_status() {
+            gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?event=push&head_sha=${GITHUB_SHA}&per_page=100" \
+              --jq "[.workflow_runs[] | select(.head_branch == \"${TAG}\")] | sort_by(.run_number) | last | .status // \"missing\"" \
+              || echo unknown
+          }
+          start=$SECONDS
+          found=false
+          while :; do
+            if fetch; then found=true; break; fi
+            status=$(ci_status)
+            waited=$(( SECONDS - start ))
+            echo "No ${asset} on ${TAG} yet; ci.yml run: ${status}; waited ${waited}s"
+            if [[ "$status" == completed ]]; then
+              if fetch; then found=true; fi
+              break
+            fi
+            if [[ "$status" == missing && $waited -ge 600 ]] || [[ $waited -ge 4500 ]]; then
+              break
+            fi
+            sleep 30
+          done
+          if [[ "$found" == true ]]; then
+            echo "installer=artifacts/${asset}" >> "$GITHUB_OUTPUT"
+            echo "Found ${asset} on ${TAG}"
           else
-            echo "::notice::No Windows installer on v${VERSION}: WinGet manifest not rendered"
+            echo "::warning::No Windows installer on ${TAG} (ci.yml windows-installer / windows-release did not attach one): WinGet manifest not rendered"
           fi
 
       - name: Set up validators
