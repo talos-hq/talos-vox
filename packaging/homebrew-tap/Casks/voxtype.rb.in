@@ -1,0 +1,28 @@
+cask "voxtype" do
+  version "@VERSION@"
+  sha256 "@DMG_SHA256@"
+
+  url "https://github.com/@REPO@/releases/download/v#{version}/voxtype-#{version}-macos-universal.dmg"
+  name "Voxtype"
+  desc "Push-to-talk voice-to-text"
+  homepage "https://github.com/@REPO@"
+
+  livecheck do
+    url :url
+    strategy :github_latest
+  end
+
+  depends_on macos: ">= :ventura"
+
+  app "Voxtype.app"
+  binary "#{appdir}/Voxtype.app/Contents/MacOS/voxtype-bin", target: "voxtype"
+
+  uninstall launchctl: "io.voxtype.daemon",
+            quit:      "io.voxtype.daemon"
+
+  zap trash: [
+    "~/.config/voxtype",
+    "~/Library/Application Support/voxtype",
+    "~/Library/Logs/voxtype",
+  ]
+end

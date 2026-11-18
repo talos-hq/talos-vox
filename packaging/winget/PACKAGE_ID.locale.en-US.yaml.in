@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.10.0.schema.json
+
+PackageIdentifier: @PACKAGE_ID@
+PackageVersion: "@VERSION@"
+PackageLocale: en-US
+Publisher: talos-hq
+PublisherUrl: https://github.com/talos-hq
+PublisherSupportUrl: https://github.com/@REPO@/issues
+PackageName: Voxtype
+PackageUrl: https://github.com/@REPO@
+License: MIT
+LicenseUrl: https://github.com/@REPO@/blob/dev/LICENSE
+ShortDescription: Push-to-talk voice-to-text with local speech recognition.
+Description: |-
+  Voxtype records while you hold a hotkey, transcribes the audio on your
+  machine (Whisper and other local engines, no cloud required), and types
+  the text into the focused window.
+Moniker: voxtype
+Tags:
+  - dictation
+  - speech-to-text
+  - transcription
+  - voice
+  - whisper
+ReleaseNotesUrl: @RELEASE_NOTES_URL@
+ManifestType: defaultLocale
+ManifestVersion: 1.10.0
