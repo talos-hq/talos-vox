@@ -7546,12 +7546,17 @@ dependencies = [
  "gtk",
  "kernal-api",
  "libc",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "raw-window-handle",
  "serde_json",
  "tempfile",
  "tokio",
  "toml_edit 0.22.27",
  "tray-icon",
  "voxtype",
+ "windows-sys 0.61.2",
+ "winit",
 ]
 
 [[package]]

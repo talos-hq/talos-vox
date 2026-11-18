@@ -19,6 +19,8 @@ serde_json = "1"
 chrono = "0.4"
 # [[modes]] is an array of tables the scalar config schema does not cover.
 toml_edit = "0.22"
+# The HUD reads the level socket with voxtype::osd::ipc (async).
+tokio = { version = "1", features = ["rt", "time"] }
 
 [features]
 default = []
@@ -35,6 +37,14 @@ libc = "0.2"
 # Same crate and version as `voxtype menubar` (src/menubar.rs). No libxdo:
 # the menu has no accelerators.
 tray-icon = { version = "0.21.3", default-features = false }
+# The HUD's native window, for flags eframe doesn't expose.
+raw-window-handle = "0.6"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# eframe's winit, for the HUD's Accessory activation policy.
+winit = { version = "0.30", default-features = false }
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSResponder", "NSView", "NSWindow"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 tray-icon = { version = "0.21.3", default-features = false, optional = true }
@@ -43,6 +53,8 @@ gtk = { version = "0.18", optional = true }
 # The control channel on non-Unix hosts is a kernal-api named pipe.
 [target.'cfg(windows)'.dependencies]
 voxtype = { path = "../..", features = ["kernal-api"] }
+# HUD window styles and region.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"] }
 # The Terminate control signal for a graceful daemon stop. Same pin as the
 # root crate.
 kernal-api = { git = "https://github.com/forge-ci/kernal-api", rev = "56544cee564b3c063a8e71a6b3b76d2d1bcb669b", features = ["control-signal"] }
