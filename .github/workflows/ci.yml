@@ -235,9 +235,18 @@ jobs:
           soldr cargo build --release --bin voxtype --features kernal-api
           soldr cargo build --release -p voxtype-app
           mkdir -p dist/bin
-          # soldr may place the target dir outside ./target on Windows.
+          # soldr builds for an explicit --target, so the binaries land in
+          # target/<triple>/release; plain cargo uses target/release.
           target=$(soldr cargo metadata --format-version 1 --no-deps | python -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
-          cp "$target/release/voxtype.exe" "$target/release/voxtype-app.exe" dist/bin/
+          out=
+          for d in "$target/x86_64-pc-windows-msvc/release" "$target/release"; do
+            if [[ -f "$d/voxtype.exe" && -f "$d/voxtype-app.exe" ]]; then out=$d; break; fi
+          done
+          if [[ -z "$out" ]]; then
+            echo "::error::voxtype.exe / voxtype-app.exe not found under $target"
+            exit 1
+          fi
+          cp "$out/voxtype.exe" "$out/voxtype-app.exe" dist/bin/
           ls -l dist/bin
           dist/bin/voxtype.exe --version
           dist/bin/voxtype-app.exe --version
