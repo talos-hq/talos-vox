@@ -1,10 +1,17 @@
 //! `voxtype history list|last|clear` and `voxtype paste-last`.
 
+use std::path::Path;
+
 use voxtype::history::{default_path, Entry, Store};
 use voxtype::{config, output, HistoryAction};
 
 fn open_store() -> anyhow::Result<Store> {
     let path = default_path();
+    // Reading must not create a database for a user who never enabled
+    // history: an in-memory store reads as empty.
+    if !path.exists() {
+        return Store::open(Path::new(":memory:")).map_err(Into::into);
+    }
     Store::open(&path).map_err(|e| anyhow::anyhow!("cannot open {}: {e}", path.display()))
 }
 

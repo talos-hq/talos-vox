@@ -13,6 +13,8 @@
 //!   daemon, returned to the caller instead of typed. Built on the
 //!   `record start --file` / `record stop --wait --json` contract
 //!   (docs/INTEGRATIONS.md), so the daemon needs no new verb.
+//! - `history_list`: recent dictations from the opt-in history
+//!   (`voxtype history list --json`).
 //!
 //! The protocol layer lives here; the binary supplies the tool bodies
 //! through [`ToolHost`], so this file stays testable without a model.
@@ -53,7 +55,23 @@ pub trait ToolHost {
     /// Stop the recording `dictate_start` began and wait up to
     /// `timeout_secs` for its transcript.
     fn dictate_stop(&self, timeout_secs: u64) -> Result<Dictation, String>;
+    /// Up to `limit` history entries, newest first, as the
+    /// `voxtype history list --json` array. `enabled` reports whether new
+    /// dictations are being recorded.
+    fn history_list(&self, limit: usize) -> Result<HistoryPage, String>;
 }
+
+/// The result of `history_list`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HistoryPage {
+    /// Whether `[history] enabled` is on, i.e. new dictations are recorded.
+    pub enabled: bool,
+    /// Entries, newest first (`voxtype history list --json` objects).
+    pub entries: Value,
+}
+
+/// Default and upper bound for `history_list`'s `limit`.
+pub const HISTORY_LIST_MAX: u64 = 500;
 
 /// The result of `dictate_stop`.
 #[derive(Debug, Clone, PartialEq)]
@@ -148,6 +166,40 @@ fn tool_list() -> Value {
                 "required": ["status", "text", "engine", "model", "language", "duration_ms"]
             },
             "annotations": { "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false }
+        },
+        {
+            "name": "history_list",
+            "title": "Recent dictations",
+            "description": "Recent dictations from voxtype's opt-in local history, newest first. \
+                            Empty unless the user enabled [history] in config.toml.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "limit": { "type": "integer", "minimum": 1, "maximum": HISTORY_LIST_MAX, "description": "How many entries (default 20)." }
+                },
+                "additionalProperties": false
+            },
+            "outputSchema": {
+                "type": "object",
+                "properties": {
+                    "enabled": { "type": "boolean" },
+                    "entries": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": { "type": "integer" },
+                                "created_at_ms": { "type": "integer" },
+                                "text": { "type": "string" },
+                                "engine": { "type": "string" },
+                                "model": { "type": "string" }
+                            }
+                        }
+                    }
+                },
+                "required": ["enabled", "entries"]
+            },
+            "annotations": { "readOnlyHint": true, "openWorldHint": false }
         }
     ])
 }
@@ -247,6 +299,25 @@ fn call_tool(host: &dyn ToolHost, params: &Value) -> Result<Value, (i64, String)
                 Err(e) => tool_err(e),
             })
         }
+        "history_list" => {
+            let limit = match args.get("limit") {
+                None | Some(Value::Null) => 20,
+                Some(v) => v
+                    .as_u64()
+                    .filter(|l| (1..=HISTORY_LIST_MAX).contains(l))
+                    .ok_or((
+                        -32602,
+                        format!("limit must be an integer from 1 to {HISTORY_LIST_MAX}"),
+                    ))?,
+            };
+            Ok(match host.history_list(limit as usize) {
+                Ok(page) => {
+                    let structured = json!({ "enabled": page.enabled, "entries": page.entries });
+                    tool_ok(page.entries.to_string(), structured)
+                }
+                Err(e) => tool_err(e),
+            })
+        }
         other => Err((-32602, format!("unknown tool: {other}"))),
     }
 }
@@ -337,6 +408,16 @@ mod tests {
         fn dictate_start(&self) -> Result<String, String> {
             Ok("recording".into())
         }
+        fn history_list(&self, limit: usize) -> Result<HistoryPage, String> {
+            let all = [
+                json!({"id":2,"text":"newer"}),
+                json!({"id":1,"text":"older"}),
+            ];
+            Ok(HistoryPage {
+                enabled: true,
+                entries: Value::Array(all.into_iter().take(limit).collect()),
+            })
+        }
         fn dictate_stop(&self, timeout_secs: u64) -> Result<Dictation, String> {
             Ok(Dictation {
                 status: if timeout_secs == 1 { "timeout" } else { "ok" }.into(),
@@ -382,7 +463,13 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            ["status", "transcribe_file", "dictate_start", "dictate_stop"]
+            [
+                "status",
+                "transcribe_file",
+                "dictate_start",
+                "dictate_stop",
+                "history_list"
+            ]
         );
         assert_eq!(replies[2]["result"]["structuredContent"]["text"], "idle");
         assert_eq!(replies[2]["result"]["isError"], false);
@@ -446,5 +533,20 @@ mod tests {
         assert_eq!(replies[2]["result"]["isError"], true);
         assert_eq!(replies[3]["error"]["code"], -32602);
         assert_eq!(replies[4]["error"]["code"], -32602);
+    }
+
+    #[test]
+    fn history_list_limits() {
+        let replies = run(&[
+            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"history_list"}}),
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"history_list","arguments":{"limit":1}}}),
+            json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"history_list","arguments":{"limit":0}}}),
+        ]);
+        let all = &replies[0]["result"]["structuredContent"];
+        assert_eq!(all["enabled"], true);
+        assert_eq!(all["entries"].as_array().unwrap().len(), 2);
+        let one = &replies[1]["result"]["structuredContent"]["entries"];
+        assert_eq!(one, &json!([{"id":2,"text":"newer"}]));
+        assert_eq!(replies[2]["error"]["code"], -32602);
     }
 }

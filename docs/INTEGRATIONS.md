@@ -116,6 +116,7 @@ daemon is not modified. Logs go to stderr.
 | `transcribe_file` | `path`, optional `engine` | `{text, engine, duration_ms, speech}`. Same pipeline as `voxtype transcribe`: replacements, spoken punctuation, VAD. `speech` is false when VAD found none |
 | `dictate_start` | none | Starts a recording on the running daemon. The transcript is held for `dictate_stop` and is not typed into the focused window. Fails if the daemon is down or a dictation is already open |
 | `dictate_stop` | optional `timeout_secs` (1-120, default 120) | `{status, text, message, engine, model, language, duration_ms}`. `status` uses the `record stop --wait` values: `ok`, `empty`, `timeout`, `error`. `timeout` and `error` set `isError` |
+| `history_list` | optional `limit` (1-500, default 20) | `{enabled, entries}`: recent dictations, newest first, as in `voxtype history list --json`. Empty unless the user enabled `[history]` |
 
 A tool that fails (missing file, model not downloaded, `state_file` unset)
 returns a result with `isError: true` and the reason as text. The session
