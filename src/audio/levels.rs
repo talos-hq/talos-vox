@@ -52,12 +52,12 @@
 //! since the alternative is a permanently broken socket.
 
 use crate::config::Config;
+use crate::local_ipc::{Listener, Stream};
 use std::io;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
-use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 
@@ -238,7 +238,7 @@ fn bind_and_spawn(
         let _ = std::fs::remove_file(socket_path);
     }
 
-    let listener = UnixListener::bind(socket_path)?;
+    let listener = Listener::bind(socket_path)?;
 
     // Frame fan-in: any number of recording-session producers can send.
     // 200 frames = 2 seconds of buffered headroom at 100 Hz, plenty.
@@ -361,7 +361,7 @@ struct SubscriberSlot {
 }
 
 async fn run_accept_loop(
-    listener: UnixListener,
+    listener: Listener,
     sub_tx: mpsc::UnboundedSender<SubscriberSlot>,
     state: Arc<HubState>,
 ) {
@@ -379,7 +379,7 @@ async fn run_accept_loop(
         }
 
         match listener.accept().await {
-            Ok((stream, _addr)) => {
+            Ok(stream) => {
                 let (tx, rx) = mpsc::channel::<AudioFrame>(SUBSCRIBER_QUEUE_DEPTH);
                 let slot = SubscriberSlot { tx };
                 if sub_tx.send(slot).is_err() {
@@ -412,15 +412,15 @@ async fn run_accept_loop(
     }
 }
 
-async fn run_subscriber_writer(mut stream: UnixStream, mut rx: mpsc::Receiver<AudioFrame>) {
+async fn run_subscriber_writer(mut stream: Stream, mut rx: mpsc::Receiver<AudioFrame>) {
     while let Some(frame) = rx.recv().await {
         let bytes = frame.to_bytes();
-        if let Err(e) = stream.write_all(&bytes).await {
+        if let Err(e) = AsyncWriteExt::write_all(&mut stream, &bytes).await {
             tracing::trace!("Audio subscriber write error: {}", e);
             break;
         }
     }
-    let _ = stream.shutdown().await;
+    let _ = AsyncWriteExt::shutdown(&mut stream).await;
 }
 
 async fn run_broadcast_loop(
@@ -835,7 +835,9 @@ mod tests {
         let hub = LevelHub::start(path.clone()).await.expect("start hub");
 
         // Connect a client.
-        let _client = UnixStream::connect(&path).await.expect("client connect");
+        let _client = crate::local_ipc::connect(&path)
+            .await
+            .expect("client connect");
 
         // Drive a frame through; the client should see 16 bytes.
         hub.frame_sink().publish(AudioFrame {
@@ -847,7 +849,7 @@ mod tests {
 
         let mut buf = [0u8; FRAME_BYTES];
         let mut client = _client;
-        let read_fut = client.read_exact(&mut buf);
+        let read_fut = AsyncReadExt::read_exact(&mut client, &mut buf);
         let read_res = tokio::time::timeout(std::time::Duration::from_secs(2), read_fut).await;
         assert!(read_res.is_ok(), "timed out reading frame");
         read_res.unwrap().expect("read frame bytes");
@@ -878,13 +880,13 @@ mod tests {
         // kernel completes the SYN handshake; we don't care, we only
         // care that the watchdog respawns afterward.
         arm_global_panic();
-        let _ = UnixStream::connect(&path).await;
+        let _ = crate::local_ipc::connect(&path).await;
 
         // Give the watchdog up to 5s to notice and rebind.
         let mut last_err = None;
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let new_client = loop {
-            match UnixStream::connect(&path).await {
+            match crate::local_ipc::connect(&path).await {
                 Ok(c) => break Some(c),
                 Err(e) => {
                     last_err = Some(e);
@@ -920,7 +922,7 @@ mod tests {
                 });
                 let try_read = tokio::time::timeout(
                     std::time::Duration::from_millis(100),
-                    client.read_exact(&mut buf),
+                    AsyncReadExt::read_exact(&mut client, &mut buf),
                 )
                 .await;
                 if let Ok(Ok(_)) = try_read {
@@ -954,7 +956,7 @@ mod tests {
 
         arm_global_panic();
         {
-            let _ = UnixStream::connect(&path).await;
+            let _ = crate::local_ipc::connect(&path).await;
         }
 
         // Wait until HubState pointer changes (i.e., respawn replaced it).

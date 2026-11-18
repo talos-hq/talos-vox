@@ -24,11 +24,165 @@ use crate::output::TextOutput;
 use crate::state::{ChunkResult, State};
 use crate::text::TextProcessor;
 use crate::transcribe::{StreamHandle, StreamingEvent, Transcriber};
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+use host_stubs::HotkeyEvent;
+#[cfg(not(unix))]
+use host_stubs::Signal;
+#[cfg(not(unix))]
+use host_stubs::{signal, SignalKind};
 use pidlock::Pidlock;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::signal::unix::{signal, SignalKind};
+#[cfg(unix)]
+use tokio::signal::unix::{signal, Signal, SignalKind};
+
+/// A start or stop trigger: the Unix signal, or the same request arriving
+/// over the control channel. A closed channel never fires.
+struct Trigger {
+    signal: Signal,
+    control: tokio::sync::mpsc::UnboundedReceiver<()>,
+    control_open: bool,
+}
+
+impl Trigger {
+    fn new(signal: Signal, control: tokio::sync::mpsc::UnboundedReceiver<()>) -> Self {
+        Self {
+            signal,
+            control,
+            control_open: true,
+        }
+    }
+
+    async fn recv(&mut self) -> Option<()> {
+        loop {
+            tokio::select! {
+                fired = self.signal.recv() => return fired,
+                request = self.control.recv(), if self.control_open => match request {
+                    Some(()) => return Some(()),
+                    None => self.control_open = false,
+                },
+            }
+        }
+    }
+}
+
+/// Hosts without Unix control signals or a built-in hotkey backend.
+///
+/// With kernal-api, `signal` mirrors `tokio::signal::unix::signal` on top of
+/// kernal-api's control signals (named events, console close/shutdown), so
+/// `record start/stop` reaches the daemon by PID as it does on Unix.
+/// Without it these sources never fire and the daemon is driven over the
+/// control channel and stopped with Ctrl+C.
+#[cfg(not(unix))]
+mod host_stubs {
+    #[cfg(feature = "kernal-api")]
+    pub use control_signals::{signal, Signal, SignalKind};
+
+    #[cfg(feature = "kernal-api")]
+    mod control_signals {
+        use kernal_api::control_signal::{ControlReceiver, ControlSignal};
+        use std::sync::Mutex;
+        use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+
+        pub struct SignalKind(ControlSignal);
+
+        impl SignalKind {
+            pub fn user_defined1() -> Self {
+                Self(ControlSignal::User1)
+            }
+            pub fn user_defined2() -> Self {
+                Self(ControlSignal::User2)
+            }
+            pub fn terminate() -> Self {
+                Self(ControlSignal::Terminate)
+            }
+        }
+
+        pub struct Signal(UnboundedReceiver<()>);
+
+        impl Signal {
+            pub async fn recv(&mut self) -> Option<()> {
+                self.0.recv().await
+            }
+        }
+
+        type Routes = Vec<(ControlSignal, UnboundedSender<()>)>;
+
+        /// One process-wide receiver fans out to every `signal` subscriber.
+        static ROUTES: Mutex<Option<Routes>> = Mutex::new(None);
+
+        fn route(signal: ControlSignal) {
+            let routes = ROUTES.lock().unwrap_or_else(|e| e.into_inner());
+            for (kind, sender) in routes.iter().flatten() {
+                if *kind == signal {
+                    let _ = sender.send(());
+                }
+            }
+        }
+
+        /// Subscribe to `kind`; must run inside the Tokio runtime.
+        pub fn signal(kind: SignalKind) -> std::io::Result<Signal> {
+            let mut routes = ROUTES.lock().unwrap_or_else(|e| e.into_inner());
+            if routes.is_none() {
+                let mut receiver = ControlReceiver::listen()?;
+                tokio::spawn(async move {
+                    while let Some(signal) = receiver.recv().await {
+                        route(signal);
+                    }
+                });
+                *routes = Some(Vec::new());
+            }
+            let (sender, receiver) = unbounded_channel();
+            routes.get_or_insert_with(Vec::new).push((kind.0, sender));
+            Ok(Signal(receiver))
+        }
+    }
+
+    #[cfg(not(feature = "kernal-api"))]
+    pub struct SignalKind;
+
+    #[cfg(not(feature = "kernal-api"))]
+    impl SignalKind {
+        pub fn user_defined1() -> Self {
+            Self
+        }
+        pub fn user_defined2() -> Self {
+            Self
+        }
+        pub fn terminate() -> Self {
+            Self
+        }
+    }
+
+    #[cfg(not(feature = "kernal-api"))]
+    pub struct Signal;
+
+    #[cfg(not(feature = "kernal-api"))]
+    impl Signal {
+        pub async fn recv(&mut self) -> Option<()> {
+            std::future::pending().await
+        }
+    }
+
+    #[cfg(not(feature = "kernal-api"))]
+    pub fn signal(_kind: SignalKind) -> std::io::Result<Signal> {
+        Ok(Signal)
+    }
+
+    /// Mirrors the Linux and macOS listener events so the daemon's match
+    /// arms stay platform-agnostic. No listener exists to construct them.
+    #[allow(dead_code)]
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum HotkeyEvent {
+        Pressed {
+            model_override: Option<String>,
+            profile_override: Option<String>,
+        },
+        Released,
+        Cancel,
+    }
+}
 
 /// Send a desktop notification with optional engine icon
 async fn send_notification(
@@ -85,6 +239,10 @@ async fn send_notification_with_lifetime(
         let engine_for_icon = if show_engine_icon { Some(engine) } else { None };
         notification::send_with_engine(&title, body, engine_for_icon).await;
     }
+
+    // No desktop notification backend on other hosts yet.
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let _ = (title, body, show_engine_icon, engine, urgency, lifetime);
 }
 
 /// Take down the recording banner now that the recording has ended.
@@ -1031,6 +1189,8 @@ type TranscriberLoadTask = tokio::task::JoinHandle<
 /// Main daemon that orchestrates all components
 pub struct Daemon {
     config: Config,
+    /// Daemon state as reported over the control channel.
+    control_state: crate::control::SharedState,
     /// When the `record start` being handled was issued, while that start
     /// runs. Lets a cancel racing the start signal survive the #606
     /// stale-cancel sweep.
@@ -1209,6 +1369,7 @@ impl Daemon {
             config,
             config_path,
             state_file_path,
+            control_state: std::sync::Arc::new(std::sync::Mutex::new("idle".to_string())),
             pid_file_path: None,
             audio_feedback,
             text_processor,
@@ -1326,6 +1487,9 @@ impl Daemon {
 
     /// Update the state file if configured
     fn update_state(&self, state_name: &str) {
+        if let Ok(mut state) = self.control_state.lock() {
+            *state = state_name.to_string();
+        }
         if let Some(ref path) = self.state_file_path {
             write_state_file(path, state_name);
         }
@@ -1336,10 +1500,8 @@ impl Daemon {
         // The marker survives the transcribing state and is cleared on the way
         // back to idle.
         match state_name {
-            "recording" | "streaming" => {
-                if read_bool_override("no_osd").unwrap_or(false) {
-                    set_osd_suppressed(true);
-                }
+            "recording" | "streaming" if read_bool_override("no_osd").unwrap_or(false) => {
+                set_osd_suppressed(true);
             }
             "idle" | "stopped" => set_osd_suppressed(false),
             _ => {}
@@ -1388,6 +1550,23 @@ impl Daemon {
         // ever apply to a recording that was live, or already requested,
         // when it was issued (#606).
         discard_stale_cancel(self.start_request);
+        // Publish preparation before the synchronous ducking hook. Capture is
+        // still closed, so neither the cue nor its acoustic tail enters audio.
+        self.update_state("preparing");
+        if let Some(cmd) = &self.config.output.pre_recording_command {
+            if let Err(e) = output::run_hook(cmd, "pre_recording").await {
+                tracing::error!("Pre-recording preparation failed: {}", e);
+                self.update_state("idle");
+                return Err(());
+            }
+        }
+        if let Some(ref feedback) = self.audio_feedback {
+            if let Err(e) = feedback.play_start_and_wait() {
+                tracing::warn!("Start cue failed: {}", e);
+            }
+            tokio::time::sleep(Duration::from_millis(75)).await;
+        }
+        tracing::info!("Start cue finished; opening microphone");
         match audio::create_capture(&self.config.audio) {
             Ok(mut capture) => match capture.start().await {
                 Ok(chunk_rx) => {
@@ -1420,12 +1599,14 @@ impl Daemon {
                     Ok(capture)
                 }
                 Err(e) => {
+                    self.update_state("idle");
                     tracing::error!("Failed to start audio: {}", e);
                     self.play_feedback(SoundEvent::Error);
                     Err(())
                 }
             },
             Err(e) => {
+                self.update_state("idle");
                 tracing::error!("Failed to create audio capture: {}", e);
                 self.play_feedback(SoundEvent::Error);
                 Err(())
@@ -3258,8 +3439,11 @@ impl Daemon {
                     let audio_duration = samples.len() as f32 / 16000.0;
 
                     // Skip if too short (likely accidental press)
-                    if audio_duration < 0.3 {
-                        tracing::debug!("Recording too short ({:.2}s), ignoring", audio_duration);
+                    if samples.len() < 8_000 {
+                        tracing::info!(
+                            "Discarding recording shorter than 500 ms ({:.2}s)",
+                            audio_duration
+                        );
                         self.publish_empty_outcome();
                         self.reset_to_idle(state).await;
                         return false;
@@ -3812,15 +3996,37 @@ impl Daemon {
         self.pid_file_path = write_pid_file();
 
         // Set up signal handlers for external control
-        let mut sigusr1 = signal(SignalKind::user_defined1()).map_err(|e| {
+        let sigusr1 = signal(SignalKind::user_defined1()).map_err(|e| {
             crate::error::VoxtypeError::Config(format!("Failed to set up SIGUSR1 handler: {}", e))
         })?;
-        let mut sigusr2 = signal(SignalKind::user_defined2()).map_err(|e| {
+        let sigusr2 = signal(SignalKind::user_defined2()).map_err(|e| {
             crate::error::VoxtypeError::Config(format!("Failed to set up SIGUSR2 handler: {}", e))
         })?;
         let mut sigterm = signal(SignalKind::terminate()).map_err(|e| {
             crate::error::VoxtypeError::Config(format!("Failed to set up SIGTERM handler: {}", e))
         })?;
+
+        // The control channel feeds the same start/stop arms as the signals.
+        let (start_tx, start_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (stop_tx, stop_rx) = tokio::sync::mpsc::unbounded_channel();
+        match crate::control::serve(&crate::control::socket_path(), self.control_state.clone()) {
+            Ok(mut commands) => {
+                tokio::spawn(async move {
+                    while let Some(command) = commands.recv().await {
+                        let routed = match command {
+                            crate::control::Command::Start => start_tx.send(()),
+                            crate::control::Command::Stop => stop_tx.send(()),
+                        };
+                        if routed.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            Err(e) => tracing::warn!("Control socket unavailable: {}", e),
+        }
+        let mut sigusr1 = Trigger::new(sigusr1, start_rx);
+        let mut sigusr2 = Trigger::new(sigusr2, stop_rx);
 
         // Ensure required directories exist
         Config::ensure_directories().map_err(|e| {
@@ -4135,14 +4341,6 @@ impl Daemon {
                                                 };
                                             }
                                             self.update_state("recording");
-                                            self.play_feedback(SoundEvent::RecordingStart);
-
-                                            // Run pre-recording hook (e.g., enter compositor submap for cancel)
-                                            if let Some(cmd) = &self.config.output.pre_recording_command {
-                                                if let Err(e) = output::run_hook(cmd, "pre_recording").await {
-                                                    tracing::warn!("{}", e);
-                                                }
-                                            }
                                         }
                                         Err(()) => {
                                             // Helper already logged and played the error sound.
@@ -4282,14 +4480,6 @@ impl Daemon {
                                                 };
                                             }
                                             self.update_state("recording");
-                                            self.play_feedback(SoundEvent::RecordingStart);
-
-                                            // Run pre-recording hook (e.g., enter compositor submap for cancel)
-                                            if let Some(cmd) = &self.config.output.pre_recording_command {
-                                                if let Err(e) = output::run_hook(cmd, "pre_recording").await {
-                                                    tracing::warn!("{}", e);
-                                                }
-                                            }
                                         }
                                         Err(()) => {
                                             // Helper already logged and played the error sound.
@@ -4725,14 +4915,6 @@ impl Daemon {
                                         };
                                     }
                                     self.update_state("recording");
-                                    self.play_feedback(SoundEvent::RecordingStart);
-
-                                    // Run pre-recording hook (e.g., enter compositor submap for cancel)
-                                    if let Some(cmd) = &self.config.output.pre_recording_command {
-                                        if let Err(e) = output::run_hook(cmd, "pre_recording").await {
-                                            tracing::warn!("{}", e);
-                                        }
-                                    }
                                 }
                                 Err(()) => {
                                     // Helper already logged and played the error sound.
@@ -5931,6 +6113,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_stale_lockfile_cleanup() {
         with_test_runtime_dir(|dir| {
@@ -5948,6 +6131,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_stale_lockfile_not_cleaned_if_pid_running() {
         with_test_runtime_dir(|dir| {

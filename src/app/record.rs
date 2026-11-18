@@ -159,9 +159,9 @@ pub(crate) fn send_record_command(
     }
 
     // For toggle, we need to read current state to decide which signal to send
-    let signal: libc::c_int = match &action {
-        RecordAction::Start { .. } => libc::SIGUSR1,
-        RecordAction::Stop { .. } => libc::SIGUSR2,
+    let start = match &action {
+        RecordAction::Start { .. } => true,
+        RecordAction::Stop { .. } => false,
         RecordAction::Toggle { .. } => {
             // Read current state to determine action
             let state_file = match config.resolve_state_file() {
@@ -191,11 +191,7 @@ pub(crate) fn send_record_command(
             // timeout fires — leaking audio into whatever window
             // has focus.
             let active = matches!(current_state.trim(), "recording" | "streaming");
-            if active {
-                libc::SIGUSR2 // Stop
-            } else {
-                libc::SIGUSR1 // Start
-            }
+            !active
         }
         RecordAction::Cancel => unreachable!(), // Handled above
     };
@@ -224,20 +220,16 @@ pub(crate) fn send_record_command(
     // the daemon handles the signal still cancels it instead of being swept
     // up as a leftover.
     let start_request = runtime_dir_file(START_REQUEST_FILE);
-    if signal == libc::SIGUSR1 {
+    if start {
         std::fs::write(&start_request, trigger_stamp())
             .map_err(|e| anyhow::anyhow!("Failed to write start request: {}", e))?;
     }
 
-    let result = unsafe { libc::kill(pid, signal) };
-    if result != 0 {
-        if signal == libc::SIGUSR1 {
+    if let Err(e) = deliver(pid, start) {
+        if start {
             let _ = std::fs::remove_file(&start_request);
         }
-        return Err(anyhow::anyhow!(
-            "Failed to send signal to daemon: {}",
-            std::io::Error::last_os_error()
-        ));
+        return Err(anyhow::anyhow!("Failed to reach daemon: {}", e));
     }
 
     if let Some(transcript) = wait_target {
@@ -470,6 +462,45 @@ fn await_cancel(cancel_file: &Path, state_file: &Path, timeout: Duration) -> boo
             return false;
         }
         std::thread::sleep(POLL);
+    }
+}
+
+/// Unix daemons take start/stop as SIGUSR1/SIGUSR2.
+#[cfg(unix)]
+fn deliver(pid: i32, start: bool) -> std::io::Result<()> {
+    let signal = if start { libc::SIGUSR1 } else { libc::SIGUSR2 };
+    if unsafe { libc::kill(pid, signal) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Other hosts send kernal-api's equivalent control signals to the daemon PID.
+#[cfg(all(not(unix), feature = "kernal-api"))]
+fn deliver(pid: i32, start: bool) -> std::io::Result<()> {
+    use kernal_api::control_signal::{send, ControlSignal};
+    let pid = u32::try_from(pid).map_err(|_| std::io::ErrorKind::InvalidInput)?;
+    send(
+        pid,
+        if start {
+            ControlSignal::User1
+        } else {
+            ControlSignal::User2
+        },
+    )
+}
+
+/// Without kernal-api, other hosts reach the daemon over its control channel.
+#[cfg(all(not(unix), not(feature = "kernal-api")))]
+fn deliver(_pid: i32, start: bool) -> std::io::Result<()> {
+    let reply = voxtype::control::request(
+        &voxtype::control::socket_path(),
+        if start { "start" } else { "stop" },
+    )?;
+    if reply["ok"] == true {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(reply["error"].to_string()))
     }
 }
 

@@ -93,6 +93,59 @@ decides for itself when to send it.
 A `[profiles.agent]` block with a `post_process_command` is a good place to
 normalise dictation before an agent sees it, stripping filler words for instance.
 
+## MCP server (`voxtype mcp`)
+
+Agent hosts that speak the Model Context Protocol (Claude Code, Hermes, Talos)
+can launch Voxtype as an MCP server. It is a build-time feature:
+
+```sh
+cargo build --release --features mcp
+```
+
+The server runs in the `voxtype mcp` process, talks JSON-RPC on stdin/stdout,
+and exits when stdin closes. Nothing listens on a socket or port, and the
+daemon is not modified. Logs go to stderr.
+
+```json
+{ "mcpServers": { "voxtype": { "command": "voxtype", "args": ["mcp"] } } }
+```
+
+| Tool | Arguments | Returns |
+|------|-----------|---------|
+| `status` | none | The `voxtype status --format json --extended` object, byte for byte. Needs `state_file` configured |
+| `transcribe_file` | `path`, optional `engine` | `{text, engine, duration_ms, speech}`. Same pipeline as `voxtype transcribe`: replacements, spoken punctuation, VAD. `speech` is false when VAD found none |
+
+A tool that fails (missing file, model not downloaded, `state_file` unset)
+returns a result with `isError: true` and the reason as text. The session
+continues.
+
+`transcribe_file` loads the model in the MCP process, not the daemon, so the
+first call pays model load time.
+
+## Control socket protocol
+
+The daemon also answers on a local control socket,
+`$XDG_RUNTIME_DIR/voxtype/control.sock` (a named pipe of the same name on
+Windows). It is local only: a Unix socket in your runtime directory, with no
+network listener. Each request is one line, and each reply is one JSON line.
+
+Versioned requests (v1) are JSON objects. `id` is optional and is echoed back:
+
+```text
+> {"v":1,"cmd":"status","id":1}
+< {"id":1,"ok":true,"state":"idle","v":1}
+> {"v":2,"cmd":"status"}
+< {"error":"unsupported protocol version 2; this daemon speaks v1","ok":false,"v":1}
+```
+
+v1 commands are `start`, `stop` and `status`. The daemon applies a `start` or
+`stop` after it has replied, so the `state` in that reply can still show the
+previous state. Send `status` afterwards to see the new one.
+
+The original bare words `start`, `stop` and `status` are still accepted, and
+always will be. Their replies stay byte-for-byte what they were
+(`{"ok":true,"state":"idle"}`).
+
 ## What Voxtype will not do for you
 
 Voxtype does not edit your configuration, and asks that you not edit its own:

@@ -73,19 +73,27 @@ fn find_audio_device(host: &cpal::Host, device_name: &str) -> Result<cpal::Devic
         .collect();
 
     // Collect device names for error message
-    let device_names: Vec<String> = devices.iter().filter_map(|d| d.name().ok()).collect();
+    let device_names: Vec<String> = devices
+        .iter()
+        .filter_map(|d| d.description().map(|x| x.name().to_string()).ok())
+        .collect();
 
     let search_lower = device_name.to_lowercase();
 
     // 1. Try exact match (case-sensitive)
     for device in &devices {
-        if let Ok(name) = device.name() {
+        if let Ok(name) = device.description().map(|x| x.name().to_string()) {
             if name == device_name {
                 tracing::debug!("Found audio device by exact match: {}", name);
                 return host
                     .input_devices()
                     .map_err(|e| AudioError::Connection(e.to_string()))?
-                    .find(|d| d.name().map(|n| n == device_name).unwrap_or(false))
+                    .find(|d| {
+                        d.description()
+                            .map(|x| x.name().to_string())
+                            .map(|n| n == device_name)
+                            .unwrap_or(false)
+                    })
                     .ok_or_else(|| AudioError::DeviceNotFound(device_name.to_string()));
             }
         }
@@ -93,7 +101,7 @@ fn find_audio_device(host: &cpal::Host, device_name: &str) -> Result<cpal::Devic
 
     // 2. Try exact match (case-insensitive)
     for device in &devices {
-        if let Ok(name) = device.name() {
+        if let Ok(name) = device.description().map(|x| x.name().to_string()) {
             if name.to_lowercase() == search_lower {
                 tracing::debug!(
                     "Found audio device by case-insensitive match: {} (searched for: {})",
@@ -104,7 +112,12 @@ fn find_audio_device(host: &cpal::Host, device_name: &str) -> Result<cpal::Devic
                 return host
                     .input_devices()
                     .map_err(|e| AudioError::Connection(e.to_string()))?
-                    .find(|d| d.name().map(|n| n == matched_name).unwrap_or(false))
+                    .find(|d| {
+                        d.description()
+                            .map(|x| x.name().to_string())
+                            .map(|n| n == matched_name)
+                            .unwrap_or(false)
+                    })
                     .ok_or_else(|| AudioError::DeviceNotFound(device_name.to_string()));
             }
         }
@@ -112,7 +125,7 @@ fn find_audio_device(host: &cpal::Host, device_name: &str) -> Result<cpal::Devic
 
     // 3. Try substring match (case-insensitive)
     for device in &devices {
-        if let Ok(name) = device.name() {
+        if let Ok(name) = device.description().map(|x| x.name().to_string()) {
             if name.to_lowercase().contains(&search_lower) {
                 tracing::debug!(
                     "Found audio device by substring match: {} (searched for: {})",
@@ -123,7 +136,12 @@ fn find_audio_device(host: &cpal::Host, device_name: &str) -> Result<cpal::Devic
                 return host
                     .input_devices()
                     .map_err(|e| AudioError::Connection(e.to_string()))?
-                    .find(|d| d.name().map(|n| n == matched_name).unwrap_or(false))
+                    .find(|d| {
+                        d.description()
+                            .map(|x| x.name().to_string())
+                            .map(|n| n == matched_name)
+                            .unwrap_or(false)
+                    })
                     .ok_or_else(|| AudioError::DeviceNotFound(device_name.to_string()));
             }
         }
@@ -164,7 +182,10 @@ impl AudioCapture for CpalCapture {
             find_audio_device(&host, &self.config.device)?
         };
 
-        let device_name = device.name().unwrap_or_else(|_| "unknown".to_string());
+        let device_name = device
+            .description()
+            .map(|x| x.name().to_string())
+            .unwrap_or_else(|_| "unknown".to_string());
         tracing::info!("Using audio device: {}", device_name);
 
         // Get supported config
@@ -172,7 +193,7 @@ impl AudioCapture for CpalCapture {
             .default_input_config()
             .map_err(|e| AudioError::Connection(e.to_string()))?;
 
-        let source_sample_rate = supported_config.sample_rate().0;
+        let source_sample_rate = supported_config.sample_rate();
         let source_channels = supported_config.channels() as usize;
         let target_sample_rate = self.config.sample_rate;
         let sample_format = supported_config.sample_format();
@@ -412,7 +433,7 @@ fn build_stream<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     params: StreamBuildParams,
-    err_fn: impl Fn(cpal::StreamError) + Send + 'static,
+    err_fn: impl Fn(cpal::Error) + Send + 'static,
 ) -> Result<cpal::Stream, AudioError>
 where
     T: cpal::Sample + cpal::SizedSample + Send + 'static,
@@ -430,7 +451,7 @@ where
 
     let stream = device
         .build_input_stream(
-            config,
+            *config,
             move |data: &[T], _: &cpal::InputCallbackInfo| {
                 // Convert to f32 and mix to mono
                 let mono_f32: Vec<f32> = data

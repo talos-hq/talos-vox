@@ -34,12 +34,13 @@
           openssl
         ];
 
-        # Cargo.lock contains four crates from the same pinned openvino-rs Git
-        # revision. Nix requires an explicit fixed-output hash for every Git
+        # Cargo.lock pins kernal-api and four crates from openvino-rs to Git
+        # revisions. Nix requires an explicit fixed-output hash for every Git
         # dependency before it can vendor the lockfile.
         commonCargoLock = {
           lockFile = ./Cargo.lock;
           outputHashes = {
+            "kernal-api-0.1.36" = "sha256-zRHChFHGb+9jsF379KPxVADL/WL2h/aUUal8+IPnrcU=";
             "openvino-finder-0.11.0" = "sha256-nQWeHNdLlRk+owh3B6VpArAG2dr66HeBI2RHfDhyvvU=";
             "openvino-genai-0.11.0" = "sha256-nQWeHNdLlRk+owh3B6VpArAG2dr66HeBI2RHfDhyvvU=";
             "openvino-genai-sys-0.11.0" = "sha256-nQWeHNdLlRk+owh3B6VpArAG2dr66HeBI2RHfDhyvvU=";

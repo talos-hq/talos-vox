@@ -22,6 +22,8 @@
 #[cfg(target_os = "macos")]
 pub mod cgevent;
 pub mod clipboard;
+#[cfg(all(feature = "kernal-api", not(target_os = "linux")))]
+pub mod desktop_input;
 pub mod dotool;
 pub mod eitype;
 // modifier_guard is evdev-based; macOS has its own osascript modifier handling.
@@ -45,6 +47,7 @@ use crate::config::{OutputConfig, OutputDriver};
 use crate::error::OutputError;
 use std::borrow::Cow;
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::FileTypeExt;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -61,6 +64,7 @@ use tokio::process::Command;
 /// 2. `$XDG_RUNTIME_DIR/.ydotool_socket` (ydotool CLI default)
 /// 3. `/tmp/.ydotool_socket` (Fedora / systemd-wide service)
 /// 4. `/run/user/$UID/.ydotool_socket` (fallback if XDG_RUNTIME_DIR unset)
+#[cfg(unix)]
 pub fn find_ydotool_socket() -> Option<PathBuf> {
     let candidates: Vec<PathBuf> = {
         let mut paths = Vec::new();
@@ -102,6 +106,12 @@ pub fn find_ydotool_socket() -> Option<PathBuf> {
             .collect::<Vec<_>>()
             .join(", ")
     );
+    None
+}
+
+/// ydotool is a Unix daemon reached over a socket; other hosts have none.
+#[cfg(not(unix))]
+pub fn find_ydotool_socket() -> Option<PathBuf> {
     None
 }
 
@@ -315,6 +325,14 @@ pub fn create_output_chain_with_override(
 
     match config.mode {
         crate::config::OutputMode::Type => {
+            // Windows and macOS type through kernal-api first; the
+            // platform's own drivers stay behind it as fallbacks.
+            #[cfg(all(feature = "kernal-api", not(target_os = "linux")))]
+            chain.push(Box::new(desktop_input::DesktopInputOutput::new(
+                config.auto_submit,
+                config.append_text.clone(),
+            )));
+
             #[cfg(target_os = "macos")]
             {
                 // macOS: Primary - CGEvent (native API, best performance)
@@ -680,6 +698,7 @@ mod tests {
         let _result = find_ydotool_socket();
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_find_ydotool_socket_respects_env_override() {
         use std::os::unix::net::UnixListener;

@@ -10,10 +10,12 @@
 //! time. They are reported as `InstallKind::Source` and switching is not
 //! applicable.
 
+use super::symlink;
 use serde::Serialize;
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::{symlink, PermissionsExt};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -236,9 +238,12 @@ pub fn install_active_binary(
         })?;
         f.write_all(wrapper.as_bytes())?;
         f.sync_all()?;
-        let mut perms = fs::metadata(active_bin)?.permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(active_bin, perms)?;
+        #[cfg(unix)]
+        {
+            let mut perms = fs::metadata(active_bin)?.permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(active_bin, perms)?;
+        }
     } else {
         symlink(binary_path, active_bin).map_err(|e| {
             anyhow::anyhow!(
@@ -1286,6 +1291,7 @@ mod tests {
     /// filesystem, and a test that assumes one fails there for reasons that
     /// have nothing to do with the code under test. The script ignores its
     /// arguments, so it works under any `/bin/sh`, dash included.
+    #[cfg(unix)]
     #[test]
     fn verify_binary_runs_accepts_a_working_binary() {
         use std::os::unix::fs::PermissionsExt;

@@ -161,6 +161,36 @@ fn pick_best_backend(
 /// Returns Some(12), Some(13), or None if CUDA isn't installed or the probe
 /// fails. Used by detect_best_parakeet_backend to pick between voxtype-onnx-cuda-12
 /// and voxtype-onnx-cuda-13 based on what the host can actually run.
+#[cfg(feature = "kernal-api")]
+pub fn detect_cuda_runtime_major() -> Option<i32> {
+    use kernal_api::platform::dylib::Library;
+    #[cfg(windows)]
+    let candidates = ["cudart64_13.dll", "cudart64_12.dll"];
+    #[cfg(not(windows))]
+    let candidates = ["libcudart.so", "libcudart.so.13", "libcudart.so.12"];
+    let library = candidates
+        .iter()
+        .find_map(|name| Library::open(name).ok())?;
+    type CudaRuntimeGetVersion = unsafe extern "C" fn(*mut i32) -> i32;
+    // SAFETY: cudaRuntimeGetVersion has this signature in every CUDA
+    // runtime, and the pointer is used only while `library` is loaded.
+    let get_version: CudaRuntimeGetVersion = unsafe { library.symbol("cudaRuntimeGetVersion") }?;
+    let mut version: i32 = 0;
+    // SAFETY: a valid out-pointer for the call's duration.
+    if unsafe { get_version(&mut version) } != 0 {
+        return None;
+    }
+    Some(version / 1000)
+}
+
+/// Without kernal-api a non-Unix host has no loader probe.
+#[cfg(all(not(unix), not(feature = "kernal-api")))]
+pub fn detect_cuda_runtime_major() -> Option<i32> {
+    None
+}
+
+/// Detect the host's CUDA runtime major version by dlopen'ing libcudart.
+#[cfg(all(unix, not(feature = "kernal-api")))]
 pub fn detect_cuda_runtime_major() -> Option<i32> {
     use std::ffi::CString;
     let candidates = ["libcudart.so", "libcudart.so.13", "libcudart.so.12"];
