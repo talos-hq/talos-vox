@@ -12,6 +12,8 @@ use crate::error::Result;
 use crate::hotkey::{self, HotkeyEvent};
 #[cfg(target_os = "macos")]
 use crate::hotkey_macos::{self as hotkey, HotkeyEvent};
+#[cfg(windows)]
+use crate::hotkey_windows::{self as hotkey, HotkeyEvent};
 use crate::meeting::{self, MeetingDaemon, MeetingEvent, StorageConfig};
 use crate::model_catalog;
 use crate::model_catalog::override_config;
@@ -24,7 +26,7 @@ use crate::output::TextOutput;
 use crate::state::{ChunkResult, State};
 use crate::text::TextProcessor;
 use crate::transcribe::{StreamHandle, StreamingEvent, Transcriber};
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 use host_stubs::HotkeyEvent;
 #[cfg(not(unix))]
 use host_stubs::Signal;
@@ -4092,7 +4094,7 @@ impl Daemon {
             }
         }
 
-        // Initialize hotkey listener (Linux: evdev, macOS: rdev)
+        // Initialize hotkey listener (Linux: evdev, macOS: rdev, Windows: WH_KEYBOARD_LL)
         #[cfg(target_os = "linux")]
         let mut hotkey_listener: Option<Box<dyn hotkey::HotkeyListener>> =
             if self.config.hotkey.enabled {
@@ -4109,7 +4111,7 @@ impl Daemon {
                 None
             };
 
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         let mut hotkey_listener: Option<Box<dyn hotkey::HotkeyListener>> = if self
             .config
             .hotkey
@@ -4130,7 +4132,7 @@ impl Daemon {
             );
             None
         };
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         let hotkey_listener: Option<()> = {
             if self.config.hotkey.enabled {
                 tracing::warn!(
@@ -4213,7 +4215,7 @@ impl Daemon {
         self.model_manager = Some(model_manager);
 
         // Start hotkey listener (if enabled)
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        #[cfg(any(target_os = "linux", target_os = "macos", windows))]
         let mut hotkey_rx = if let Some(ref mut listener) = hotkey_listener {
             match listener.start() {
                 Ok(rx) => Some(rx),
@@ -4225,7 +4227,7 @@ impl Daemon {
         } else {
             None
         };
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         let mut hotkey_rx: Option<tokio::sync::mpsc::Receiver<HotkeyEvent>> = None;
 
         // Current state
@@ -5245,11 +5247,11 @@ impl Daemon {
         }
 
         // Cleanup hotkey listener
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        #[cfg(any(target_os = "linux", target_os = "macos", windows))]
         if let Some(mut listener) = hotkey_listener {
             let _ = listener.stop(); // Best effort cleanup
         }
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         let _ = hotkey_listener; // Silence unused variable warning
 
         // Abort any pending transcription task

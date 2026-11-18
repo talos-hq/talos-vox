@@ -100,6 +100,14 @@ new engine to take effect.
 
 Controls which key triggers push-to-talk recording.
 
+How the key is detected depends on the platform: evdev on Linux (needs the
+`input` group), an event tap on macOS (needs Accessibility), and a
+`WH_KEYBOARD_LL` low-level keyboard hook on Windows (no setup). The hook only
+listens and never blocks the key. On Windows, Windows' UIPI rule applies:
+while an app running as administrator has focus, a voxtype that is not
+elevated sees no keys from it, so the hotkey does not fire there. Text
+injection into such windows is blocked for the same reason.
+
 ### key
 
 **Type:** String
