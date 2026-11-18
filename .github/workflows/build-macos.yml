@@ -23,6 +23,8 @@ on:
 jobs:
   build:
     runs-on: macos-14  # Apple Silicon runner for ARM64 build
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     # Hoisted to job scope on purpose. A step's `if:` cannot read that same
     # step's own `env:` block, so gating on secrets has to happen against a
     # job-level env var or the step silently never runs.
@@ -285,12 +287,90 @@ jobs:
             releases/${{ steps.version.outputs.version }}/voxtype-*
             releases/${{ steps.version.outputs.version }}/SHA256SUMS-macos.txt
 
+  # Homebrew cask + WinGet manifest (M5c). Fills the templates in
+  # packaging/homebrew-tap/ and packaging/winget/ from this run's DMG and,
+  # on a tag whose release has one, the Windows installer. Then validates
+  # them: `brew style` + `brew audit --cask --strict` (Homebrew is on the
+  # Ubuntu runner) and Microsoft's JSON schema for each WinGet file.
+  #
+  # Nothing is published. The rendered files are a workflow artifact for the
+  # owner to copy into talos-hq/homebrew-tap and a microsoft/winget-pkgs PR
+  # once the artifacts are signed and notarized. See
+  # packaging/homebrew-tap/README.md.
+  package-manifests:
+    name: package-manifests
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: voxtype-${{ needs.build.outputs.version }}-macos
+          path: artifacts
+
+      - name: Find the Windows installer on the release
+        id: windows
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Uploaded by the Windows signing job (M5b) once that exists. Until
+          # then the release has no installer and only the cask is rendered.
+          if gh release download "v${VERSION}" --repo "$GITHUB_REPOSITORY" \
+              --pattern "voxtype-${VERSION}-windows-x64-setup.exe" --dir artifacts; then
+            echo "installer=artifacts/voxtype-${VERSION}-windows-x64-setup.exe" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::No Windows installer on v${VERSION}: WinGet manifest not rendered"
+          fi
+
+      - name: Set up validators
+        run: |
+          set -euo pipefail
+          python3 -m venv .venv
+          .venv/bin/pip install --quiet pyyaml jsonschema
+          # Homebrew is preinstalled on the Ubuntu runner but not on PATH.
+          echo "/home/linuxbrew/.linuxbrew/bin" >> "$GITHUB_PATH"
+
+      - name: Validate the templates (dry run)
+        run: |
+          set -euo pipefail
+          .venv/bin/python scripts/package-manifests.py render --dry-run \
+            --version "$VERSION" --repo "$GITHUB_REPOSITORY" --out dry-run
+          .venv/bin/python scripts/package-manifests.py validate dry-run --schema-cache .schemas
+
+      - name: Render from the release artifacts
+        env:
+          INSTALLER: ${{ steps.windows.outputs.installer }}
+        run: |
+          set -euo pipefail
+          args=(--version "$VERSION" --repo "$GITHUB_REPOSITORY" --out package-manifests)
+          args+=(--dmg "artifacts/voxtype-${VERSION}-macos-universal.dmg")
+          if [[ -n "${INSTALLER:-}" ]]; then
+            args+=(--windows-installer "$INSTALLER")
+          fi
+          .venv/bin/python scripts/package-manifests.py render "${args[@]}"
+          .venv/bin/python scripts/package-manifests.py validate package-manifests --schema-cache .schemas
+          find package-manifests -type f | sort
+
+      - name: Upload manifests
+        uses: actions/upload-artifact@v4
+        with:
+          name: voxtype-${{ needs.build.outputs.version }}-package-manifests
+          path: package-manifests
+          if-no-files-found: error
+
   # Aggregator job — branch protection only needs to require `macos-ci-success`.
   # If we add more macOS jobs (arm64 smoke test, notarization gate, etc.) they
   # join the `needs:` list and the protection rule keeps working unchanged.
   macos-ci-success:
     name: macos-ci-success
-    needs: [build]
+    needs: [build, package-manifests]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -298,9 +378,15 @@ jobs:
         run: |
           set -e
           build='${{ needs.build.result }}'
+          manifests='${{ needs.package-manifests.result }}'
           echo "build: $build"
+          echo "package-manifests: $manifests"
           if [[ "$build" != success ]]; then
             echo "::error::macOS build did not succeed"
+            exit 1
+          fi
+          if [[ "$manifests" != success ]]; then
+            echo "::error::Homebrew cask / WinGet manifest generation did not succeed"
             exit 1
           fi
           echo "macOS build succeeded."
