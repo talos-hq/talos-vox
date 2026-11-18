@@ -20,6 +20,7 @@ mod config_get;
 mod config_schema;
 mod config_set;
 mod config_show;
+mod context;
 mod dispatch;
 mod history;
 mod info;

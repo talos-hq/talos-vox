@@ -472,6 +472,10 @@ pub(crate) async fn dispatch(
             super::history::run_history(&config, action)?;
         }
 
+        Commands::Context { watch } => {
+            super::context::run_context(watch);
+        }
+
         Commands::PasteLast => {
             super::history::run_paste_last(&config).await?;
         }

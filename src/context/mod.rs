@@ -5,13 +5,20 @@
 //! `VOXTYPE_APP_ID` / `VOXTYPE_APP_TITLE` for the post-process command, and
 //! is the input that Modes (per-app profiles) will resolve against.
 //!
-//! Probes, picked from the session's environment:
+//! Probes, picked from the session's environment by [`detect`]:
 //! - Hyprland (`HYPRLAND_INSTANCE_SIGNATURE`): `hyprctl activewindow -j`.
 //! - Sway (`SWAYSOCK`): `swaymsg -t get_tree`, the focused node.
+//! - X11 sessions (`XDG_SESSION_TYPE=x11`, or `DISPLAY` without
+//!   `WAYLAND_DISPLAY`): `xprop` on `_NET_ACTIVE_WINDOW`.
 //!
-//! Everywhere else (GNOME, KDE, X11 without a probe yet, macOS and Windows
-//! until their probes land) there is no snapshot: the variables are unset
-//! and behaviour is exactly what it was before.
+//! Everywhere else (GNOME and KDE on Wayland, which expose no focus
+//! protocol to clients) there is no snapshot: the variables are unset and
+//! behaviour is exactly what it was before. `voxtype context` shows what
+//! this session reports.
+
+mod hyprland;
+mod sway;
+mod x11;
 
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
@@ -75,51 +82,64 @@ fn non_empty(v: Option<&Value>) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Parse `hyprctl activewindow -j`. An empty workspace answers `{}`.
-pub fn parse_hyprland(json: &str) -> Option<AppContext> {
-    let v: Value = serde_json::from_str(json).ok()?;
-    let app_id = non_empty(v.get("class")).or_else(|| non_empty(v.get("initialClass")))?;
-    Some(AppContext {
-        app_id,
-        title: non_empty(v.get("title")),
-        source: "hyprland",
-    })
+/// A way to ask "which application has focus" on one kind of session.
+pub trait FocusProbe: Send + Sync {
+    /// Short name, shown by `voxtype context`.
+    fn name(&self) -> &'static str;
+    /// The focused application now, or `None` if nothing is focused or the
+    /// probe failed.
+    fn snapshot(&self) -> Option<AppContext>;
 }
 
-/// Parse `swaymsg -t get_tree`: the focused leaf's `app_id` (Wayland) or
-/// `window_properties.class` (Xwayland).
-pub fn parse_sway(json: &str) -> Option<AppContext> {
-    fn focused(node: &Value) -> Option<&Value> {
-        if node.get("focused").and_then(Value::as_bool) == Some(true) {
-            return Some(node);
+/// Session facts that pick a probe, separated from the real environment so
+/// the choice is testable.
+#[derive(Debug, Default, Clone)]
+pub struct Session {
+    pub hyprland: bool,
+    pub sway: bool,
+    pub wayland: bool,
+    pub x11_display: bool,
+    pub session_type: Option<String>,
+}
+
+impl Session {
+    pub fn from_env() -> Self {
+        let set = |k: &str| std::env::var_os(k).is_some_and(|v| !v.is_empty());
+        Self {
+            hyprland: set("HYPRLAND_INSTANCE_SIGNATURE"),
+            sway: set("SWAYSOCK"),
+            wayland: set("WAYLAND_DISPLAY"),
+            x11_display: set("DISPLAY"),
+            session_type: std::env::var("XDG_SESSION_TYPE").ok(),
         }
-        ["nodes", "floating_nodes"]
-            .iter()
-            .filter_map(|k| node.get(*k).and_then(Value::as_array))
-            .flatten()
-            .find_map(focused)
     }
-    let tree: Value = serde_json::from_str(json).ok()?;
-    let node = focused(&tree)?;
-    let app_id = non_empty(node.get("app_id"))
-        .or_else(|| non_empty(node.pointer("/window_properties/class")))?;
-    Some(AppContext {
-        app_id,
-        title: non_empty(node.get("name")),
-        source: "sway",
-    })
+}
+
+/// Which probe this session supports, if any.
+pub fn probe_for(session: &Session) -> Option<Box<dyn FocusProbe>> {
+    if session.hyprland {
+        return Some(Box::new(hyprland::Hyprland));
+    }
+    if session.sway {
+        return Some(Box::new(sway::Sway));
+    }
+    let x11 = session.session_type.as_deref() == Some("x11")
+        || (session.x11_display && !session.wayland && session.session_type.is_none());
+    if x11 {
+        return Some(Box::new(x11::X11));
+    }
+    None
+}
+
+/// The probe for the current session, if any.
+pub fn detect() -> Option<Box<dyn FocusProbe>> {
+    probe_for(&Session::from_env())
 }
 
 /// Probe the focused application now. `None` when no probe applies to
 /// this session or the probe failed.
 pub fn snapshot() -> Option<AppContext> {
-    if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
-        return parse_hyprland(&run("hyprctl", &["activewindow", "-j"])?);
-    }
-    if std::env::var_os("SWAYSOCK").is_some() {
-        return parse_sway(&run("swaymsg", &["-t", "get_tree", "-r"])?);
-    }
-    None
+    detect()?.snapshot()
 }
 
 /// The snapshot taken at the latest record start.
@@ -130,13 +150,11 @@ static CAPTURED: Mutex<Option<AppContext>> = Mutex::new(None);
 /// never waits on compositor IPC.
 pub fn capture_at_record_start() {
     set_captured(None);
-    if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none()
-        && std::env::var_os("SWAYSOCK").is_none()
-    {
+    let Some(probe) = detect() else {
         return;
-    }
-    tokio::task::spawn_blocking(|| {
-        let ctx = snapshot();
+    };
+    tokio::task::spawn_blocking(move || {
+        let ctx = probe.snapshot();
         tracing::debug!("Focused app at record start: {ctx:?}");
         set_captured(ctx);
     });
@@ -155,57 +173,46 @@ pub fn captured() -> Option<AppContext> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn hyprland_active_window() {
-        let json = r#"{"address":"0x5","class":"firefox","title":"Inbox - Mail","initialClass":"firefox","pid":42}"#;
-        assert_eq!(
-            parse_hyprland(json),
-            Some(AppContext {
-                app_id: "firefox".into(),
-                title: Some("Inbox - Mail".into()),
-                source: "hyprland"
-            })
-        );
+    fn pick(session: Session) -> Option<&'static str> {
+        probe_for(&session).map(|p| p.name())
     }
 
     #[test]
-    fn hyprland_empty_workspace_and_garbage() {
-        assert_eq!(parse_hyprland("{}"), None);
-        assert_eq!(parse_hyprland("Invalid"), None);
-        // class blank (some XWayland windows) falls back to initialClass
-        let json = r#"{"class":"","initialClass":"steam","title":""}"#;
-        let ctx = parse_hyprland(json).unwrap();
-        assert_eq!(ctx.app_id, "steam");
-        assert_eq!(ctx.title, None);
-    }
-
-    #[test]
-    fn sway_focused_wayland_and_xwayland_nodes() {
-        let tree = r#"{"focused":false,"nodes":[{"focused":false,"nodes":[
-            {"focused":false,"app_id":"foot","name":"shell","nodes":[]},
-            {"focused":false,"nodes":[],"floating_nodes":[
-                {"focused":true,"app_id":"org.gnome.Nautilus","name":"Files","nodes":[]}
-            ]}
-        ]}]}"#;
-        let ctx = parse_sway(tree).unwrap();
-        assert_eq!(ctx.app_id, "org.gnome.Nautilus");
-        assert_eq!(ctx.title.as_deref(), Some("Files"));
-        assert_eq!(ctx.source, "sway");
-
-        let xwayland = r#"{"focused":false,"nodes":[
-            {"focused":true,"app_id":null,"name":"Slack","window_properties":{"class":"Slack"},"nodes":[]}
-        ]}"#;
-        assert_eq!(parse_sway(xwayland).unwrap().app_id, "Slack");
-    }
-
-    #[test]
-    fn sway_nothing_focused() {
-        assert_eq!(parse_sway(r#"{"focused":false,"nodes":[]}"#), None);
-        // A focused workspace (no app) is not an app.
-        assert_eq!(
-            parse_sway(r#"{"focused":false,"nodes":[{"focused":true,"name":"1","nodes":[]}]}"#),
-            None
-        );
+    fn probe_selection() {
+        assert_eq!(pick(Session::default()), None);
+        let hypr = Session {
+            hyprland: true,
+            wayland: true,
+            x11_display: true,
+            ..Session::default()
+        };
+        assert_eq!(pick(hypr), Some("hyprland"));
+        let sway = Session {
+            sway: true,
+            wayland: true,
+            ..Session::default()
+        };
+        assert_eq!(pick(sway), Some("sway"));
+        let x11 = Session {
+            x11_display: true,
+            session_type: Some("x11".into()),
+            ..Session::default()
+        };
+        assert_eq!(pick(x11), Some("x11"));
+        // KDE/GNOME on Wayland: Xwayland's DISPLAY must not select xprop.
+        let kde = Session {
+            wayland: true,
+            x11_display: true,
+            session_type: Some("wayland".into()),
+            ..Session::default()
+        };
+        assert_eq!(pick(kde), None);
+        // A bare X server without logind's session type.
+        let bare = Session {
+            x11_display: true,
+            ..Session::default()
+        };
+        assert_eq!(pick(bare), Some("x11"));
     }
 
     #[test]

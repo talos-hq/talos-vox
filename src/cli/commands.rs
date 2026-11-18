@@ -188,6 +188,18 @@ pub enum Commands {
         action: HistoryAction,
     },
 
+    /// Show which application has focus, as voxtype sees it
+    ///
+    /// Prints one JSON object: the probe this session uses (hyprland, sway,
+    /// or x11; null where none applies, such as GNOME/KDE
+    /// on Wayland) and the focused app_id and title. This is what
+    /// VOXTYPE_APP_ID / VOXTYPE_APP_TITLE and [[modes]] see at record start.
+    Context {
+        /// Keep running and print a line whenever the focused app changes
+        #[arg(long)]
+        watch: bool,
+    },
+
     /// Type the most recent dictation again
     ///
     /// Sends the newest history entry through the configured output chain,
