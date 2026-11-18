@@ -8,6 +8,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use eframe::egui;
 
 use crate::client::{DaemonState, History, Request, Snapshot};
+use crate::models::Models;
 use crate::modes::Modes;
 use crate::settings::Settings;
 use crate::supervisor::{Status, Supervisor};
@@ -23,6 +24,7 @@ pub enum Tab {
     Home,
     Settings,
     Modes,
+    Models,
 }
 
 impl Tab {
@@ -31,6 +33,7 @@ impl Tab {
             "home" => Some(Tab::Home),
             "settings" => Some(Tab::Settings),
             "modes" => Some(Tab::Modes),
+            "models" => Some(Tab::Models),
             _ => None,
         }
     }
@@ -46,6 +49,9 @@ pub struct App {
     // Loaded when their tab is first opened.
     settings: Option<Settings>,
     modes: Option<Modes>,
+    models: Option<Models>,
+    /// The voxtype binary model downloads run.
+    voxtype: PathBuf,
     supervisor: Supervisor,
     #[cfg(any(
         target_os = "macos",
@@ -69,6 +75,8 @@ impl App {
             config_path,
             settings: None,
             modes: None,
+            models: None,
+            voxtype: crate::supervisor::default_daemon_binary(),
             supervisor: Supervisor::disabled(),
             #[cfg(any(
                 target_os = "macos",
@@ -77,6 +85,11 @@ impl App {
             ))]
             tray: None,
         }
+    }
+
+    pub fn with_voxtype(mut self, voxtype: PathBuf) -> Self {
+        self.voxtype = voxtype;
+        self
     }
 
     pub fn with_supervisor(mut self, supervisor: Supervisor) -> Self {
@@ -160,6 +173,7 @@ impl App {
                 ui.selectable_value(&mut self.tab, Tab::Home, "Home");
                 ui.selectable_value(&mut self.tab, Tab::Settings, "Settings");
                 ui.selectable_value(&mut self.tab, Tab::Modes, "Modes");
+                ui.selectable_value(&mut self.tab, Tab::Models, "Models");
             });
         });
         let Some(path) = self.config_path.clone() else {
@@ -180,6 +194,26 @@ impl App {
             Tab::Modes => {
                 let modes = self.modes.get_or_insert_with(|| Modes::new(path));
                 egui::CentralPanel::default().show_inside(ui, |ui| modes.show(ui));
+            }
+            Tab::Models => {
+                let voxtype = self.voxtype.clone();
+                let models = self.models.get_or_insert_with(|| {
+                    Models::new(path, voxtype::config::Config::models_dir(), voxtype)
+                });
+                egui::CentralPanel::default().show_inside(ui, |ui| models.show(ui));
+                // A newly selected model loads at the daemon's next start:
+                // restart it now if this app owns it.
+                if std::mem::take(&mut models.restart_wanted) {
+                    let note = if self.supervisor.status().owned() {
+                        self.supervisor.restart();
+                        " Restarting the daemon to load it."
+                    } else {
+                        " Restart the daemon to load it."
+                    };
+                    if let Some(Ok(m)) = &mut models.message {
+                        m.push_str(note);
+                    }
+                }
             }
         }
     }
@@ -400,11 +434,11 @@ mod tests {
             frame(&mut app);
             assert_eq!(app.snap.daemon, daemon);
         }
-        for tab in [Tab::Settings, Tab::Modes, Tab::Home] {
+        for tab in [Tab::Settings, Tab::Modes, Tab::Models, Tab::Home] {
             app.tab = tab;
             frame(&mut app);
         }
-        assert!(app.settings.is_some() && app.modes.is_some());
+        assert!(app.settings.is_some() && app.modes.is_some() && app.models.is_some());
     }
 
     #[test]
@@ -449,6 +483,7 @@ mod tests {
     fn tab_names() {
         assert_eq!(Tab::parse("settings"), Some(Tab::Settings));
         assert_eq!(Tab::parse("modes"), Some(Tab::Modes));
+        assert_eq!(Tab::parse("models"), Some(Tab::Models));
         assert_eq!(Tab::parse("home"), Some(Tab::Home));
         assert_eq!(Tab::parse("nope"), None);
     }

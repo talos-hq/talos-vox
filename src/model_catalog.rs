@@ -168,7 +168,8 @@ pub fn model_health(engine: &str, model: &str) -> ModelHealth {
     model_health_in(&Config::models_dir(), engine, model)
 }
 
-pub(crate) fn model_health_in(models_dir: &Path, engine: &str, model: &str) -> ModelHealth {
+/// [`model_health`] against an explicit models dir.
+pub fn model_health_in(models_dir: &Path, engine: &str, model: &str) -> ModelHealth {
     let path = model_path(models_dir, engine, model);
     if !path.exists() {
         return ModelHealth::Missing;
@@ -231,7 +232,8 @@ pub fn verify_model(engine: &str, model: &str) -> ModelVerification {
     verify_model_in(&Config::models_dir(), engine, model)
 }
 
-pub(crate) fn verify_model_in(models_dir: &Path, engine: &str, model: &str) -> ModelVerification {
+/// [`verify_model`] against an explicit models dir.
+pub fn verify_model_in(models_dir: &Path, engine: &str, model: &str) -> ModelVerification {
     let path = model_path(models_dir, engine, model);
 
     // Whatever the cheap check already found is still true, and costs nothing
