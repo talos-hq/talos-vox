@@ -142,6 +142,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      # As in the clippy job: don't rely on the runner image's toolchain
+      # shipping clippy (ubuntu-latest stopped doing so).
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: zackees/setup-soldr@v0
       - name: Install dependencies
         if: runner.os == 'Linux'
