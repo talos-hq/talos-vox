@@ -1,5 +1,8 @@
 [workspace]
-members = ["xtask"]
+members = ["xtask", "crates/voxtype-app"]
+# The desktop app is opt-in: `cargo build` at the root builds the daemon only.
+# Build it with `soldr cargo build -p voxtype-app`.
+default-members = ["."]
 
 [package]
 name = "voxtype"
