@@ -184,6 +184,192 @@ jobs:
       - name: run --version
         run: soldr cargo run -p voxtype-app -- --version
 
+  # Windows release build + per-user Inno Setup installer (M5b), uploaded as
+  # an artifact on every run, after a silent install / --version /
+  # uninstall round trip on the runner.
+  #
+  # Authenticode signing goes through Azure Artifact Signing over OIDC (no
+  # client secret), as talos-hq/talos does: azure/login with the org's
+  # AZURE_CLIENT_ID / AZURE_TENANT_ID, then artifact-signing-action with
+  # AZURE_SIGNING_ENDPOINT / _ACCOUNT / _PROFILE. It signs the two exes
+  # before packaging and the installer after. It is attempted only on
+  # pushes to dev/main: a PR or merge-queue OIDC subject has no federated
+  # credential. When the secrets are missing, or the login fails because
+  # the signing app registration has no federated credential for this repo
+  # yet, the signing steps are skipped with a notice and the installer is
+  # built unsigned. A login that works followed by a failed signature still
+  # fails the job.
+  windows-installer:
+    name: windows-installer
+    timeout-minutes: 90
+    runs-on: windows-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      HAS_AZURE_SIGNING: ${{ secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_TENANT_ID != '' && secrets.AZURE_SIGNING_ENDPOINT != '' && secrets.AZURE_SIGNING_ACCOUNT != '' && secrets.AZURE_SIGNING_PROFILE != '' }}
+      TRY_SIGNING: ${{ github.event_name == 'push' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: zackees/setup-soldr@v0
+      - name: Windows build environment
+        shell: pwsh
+        # As in the kernal-api and desktop-app jobs.
+        run: |
+          git config --global core.longpaths true
+          "CARGO_HOME=D:\c" >> $env:GITHUB_ENV
+          "SOLDR_RUSTC_WRAPPER=none" >> $env:GITHUB_ENV
+          "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> $env:GITHUB_ENV
+      - name: Version
+        id: version
+        shell: bash
+        run: |
+          v=$(grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Version: $v"
+      - name: Build voxtype and voxtype-app (release)
+        shell: bash
+        run: |
+          soldr cargo build --release --bin voxtype --features kernal-api
+          soldr cargo build --release -p voxtype-app
+          mkdir -p dist/bin
+          # soldr builds for an explicit --target, so the binaries land in
+          # target/<triple>/release; plain cargo uses target/release.
+          target=$(soldr cargo metadata --format-version 1 --no-deps | python -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
+          out=
+          for d in "$target/x86_64-pc-windows-msvc/release" "$target/release"; do
+            if [[ -f "$d/voxtype.exe" && -f "$d/voxtype-app.exe" ]]; then out=$d; break; fi
+          done
+          if [[ -z "$out" ]]; then
+            echo "::error::voxtype.exe / voxtype-app.exe not found under $target"
+            exit 1
+          fi
+          cp "$out/voxtype.exe" "$out/voxtype-app.exe" dist/bin/
+          ls -l dist/bin
+          dist/bin/voxtype.exe --version
+          dist/bin/voxtype-app.exe --version
+
+      - name: Azure login (OIDC)
+        id: azure-login
+        if: env.TRY_SIGNING == 'true' && env.HAS_AZURE_SIGNING == 'true'
+        continue-on-error: true
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+      - name: Decide whether to sign
+        id: signing
+        shell: bash
+        env:
+          LOGIN: ${{ steps.azure-login.outcome }}
+        run: |
+          if [[ "$TRY_SIGNING" != true ]]; then
+            echo "::notice title=Windows signing skipped::${GITHUB_EVENT_NAME} runs have no Azure federated credential; signing happens on pushes to dev/main. This installer is unsigned."
+            echo "sign=false" >> "$GITHUB_OUTPUT"
+          elif [[ "$HAS_AZURE_SIGNING" != true ]]; then
+            echo "::notice title=Windows signing skipped::AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SIGNING_ENDPOINT, AZURE_SIGNING_ACCOUNT or AZURE_SIGNING_PROFILE is not set. This installer is unsigned."
+            echo "sign=false" >> "$GITHUB_OUTPUT"
+          elif [[ "$LOGIN" != success ]]; then
+            echo "::notice title=Windows signing skipped::Azure OIDC login failed. The signing app registration most likely has no federated credential for repo:${GITHUB_REPOSITORY} on ${GITHUB_REF} yet (an owner adds it in Entra ID). This installer is unsigned."
+            echo "sign=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "sign=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Sign voxtype.exe and voxtype-app.exe
+        if: steps.signing.outputs.sign == 'true'
+        uses: azure/artifact-signing-action@208f8af4bf26cf2af8597424e3cb5582801523ba # v2.0.0
+        with:
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\dist\bin
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-digest: SHA256
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          # Preinstalled on some runner images (Inno Setup 6); otherwise
+          # Chocolatey's current release (6 or 7).
+          function Find-Iscc {
+            foreach ($root in ${env:ProgramFiles(x86)}, $env:ProgramFiles) {
+              foreach ($v in '7', '6') {
+                $p = Join-Path $root "Inno Setup $v\ISCC.exe"
+                if (Test-Path $p) { return $p }
+              }
+            }
+          }
+          $iscc = Find-Iscc
+          if (-not $iscc) { choco install innosetup -y --no-progress; $iscc = Find-Iscc }
+          if (-not $iscc) { throw "ISCC.exe not found after install" }
+          Write-Host "Using $iscc"
+          "ISCC=$iscc" >> $env:GITHUB_ENV
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          & $env:ISCC "/DAppVersion=${{ steps.version.outputs.version }}" "/DBinDir=$pwd\dist\bin" "/DOutputDir=$pwd\dist" packaging\windows\voxtype.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
+          Get-ChildItem dist\*.exe
+      - name: Sign the installer
+        if: steps.signing.outputs.sign == 'true'
+        uses: azure/artifact-signing-action@208f8af4bf26cf2af8597424e3cb5582801523ba # v2.0.0
+        with:
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\dist\voxtype-${{ steps.version.outputs.version }}-windows-x64-setup.exe
+          file-digest: SHA256
+          timestamp-digest: SHA256
+      - name: Check signatures
+        shell: pwsh
+        env:
+          SIGNED: ${{ steps.signing.outputs.sign }}
+        run: |
+          $files = @("dist\bin\voxtype.exe", "dist\bin\voxtype-app.exe", "dist\voxtype-${{ steps.version.outputs.version }}-windows-x64-setup.exe")
+          $sigs = $files | ForEach-Object { Get-AuthenticodeSignature $_ }
+          $sigs | ForEach-Object { Write-Host "$($_.Status)  $($_.Path)  $($_.SignerCertificate.Subject)" }
+          $bad = $sigs | Where-Object Status -ne 'Valid'
+          if ($env:SIGNED -eq 'true' -and $bad) { throw "$(@($bad).Count) file(s) not validly signed" }
+
+      - name: Install, run and uninstall silently
+        shell: pwsh
+        run: |
+          $setup = "dist\voxtype-${{ steps.version.outputs.version }}-windows-x64-setup.exe"
+          $dir = "$env:LOCALAPPDATA\Programs\Voxtype"
+          $p = Start-Process $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/TASKS=autostart' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "setup exited $($p.ExitCode)" }
+          foreach ($f in 'voxtype.exe','voxtype-app.exe','LICENSE.txt','unins000.exe') {
+            if (-not (Test-Path "$dir\$f")) { throw "$f was not installed" }
+          }
+          & "$dir\voxtype.exe" --version
+          & "$dir\voxtype-app.exe" --version
+          $path = (Get-ItemProperty HKCU:\Environment).Path
+          if (-not ($path -split ';' -contains $dir)) { throw "install dir not on the user PATH: $path" }
+          $run = (Get-ItemProperty HKCU:\Software\Microsoft\Windows\CurrentVersion\Run).Voxtype
+          if ($run -notlike "*voxtype-app.exe*") { throw "login item missing: $run" }
+          $p = Start-Process "$dir\unins000.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "uninstall exited $($p.ExitCode)" }
+          # unins000.exe hands off to a temp copy and returns early; give
+          # that copy up to 60 s to finish.
+          $deadline = (Get-Date).AddSeconds(60)
+          while ((Test-Path "$dir\voxtype.exe") -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+          if (Test-Path "$dir\voxtype.exe") { throw "voxtype.exe left behind" }
+          $path = (Get-ItemProperty HKCU:\Environment).Path
+          if ($path -split ';' -contains $dir) { throw "install dir still on the user PATH" }
+          $run = (Get-ItemProperty HKCU:\Software\Microsoft\Windows\CurrentVersion\Run -ErrorAction SilentlyContinue).Voxtype
+          if ($run) { throw "login item left behind" }
+          Write-Host "install / run / uninstall OK"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: voxtype-${{ steps.version.outputs.version }}-windows-x64-setup
+          path: dist/voxtype-${{ steps.version.outputs.version }}-windows-x64-setup.exe
+          if-no-files-found: error
+          retention-days: 14
+
   # Aggregator job: the dev ruleset requires only `ci-success` (through the
   # merge queue). Adding/removing parallel checks above just updates the
   # `needs:` list; the ruleset never needs to be touched.
@@ -198,7 +384,7 @@ jobs:
   # then failed, timed out or was cancelled still fails the gate.
   ci-success:
     name: ci-success
-    needs: [fmt, clippy, test, kernal-api, desktop-app]
+    needs: [fmt, clippy, test, kernal-api, desktop-app, windows-installer]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -212,6 +398,7 @@ jobs:
           TEST: ${{ needs.test.result }}
           KERNAL: ${{ needs.kernal-api.result }}
           DESKTOP_APP: ${{ needs.desktop-app.result }}
+          WINDOWS_INSTALLER: ${{ needs.windows-installer.result }}
         run: |
           set -euo pipefail
           echo "fmt:        $FMT"
@@ -219,8 +406,9 @@ jobs:
           echo "test:       $TEST"
           echo "kernal-api: $KERNAL"
           echo "desktop-app: $DESKTOP_APP"
+          echo "windows-installer: $WINDOWS_INSTALLER"
           fail=0
-          for r in "$FMT" "$CLIPPY" "$TEST"; do
+          for r in "$FMT" "$CLIPPY" "$TEST" "$WINDOWS_INSTALLER"; do
             [[ "$r" == success ]] || fail=1
           done
           jobs=""

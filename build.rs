@@ -38,6 +38,19 @@ fn main() -> Result<(), Error> {
         return Ok(());
     }
 
+    // Building the whole clap command tree overflows the 1 MiB main-thread
+    // stack of a Windows build script (STATUS_STACK_OVERFLOW in release
+    // builds); give it a thread with room to spare.
+    std::thread::Builder::new()
+        .name("man-pages".into())
+        .stack_size(64 * 1024 * 1024)
+        .spawn(generate_man_pages)?
+        .join()
+        .map_err(|_| Error::other("man page generation panicked"))?
+}
+
+/// Write voxtype.1 and one page per subcommand into `$OUT_DIR/man`.
+fn generate_man_pages() -> Result<(), Error> {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap_or_else(|_| "target".to_string()));
     let man_dir = out_dir.join("man");
     fs::create_dir_all(&man_dir)?;
