@@ -53,6 +53,8 @@ pub struct App {
     /// The voxtype binary model downloads run.
     voxtype: PathBuf,
     supervisor: Supervisor,
+    /// The HUD process, stopped on exit.
+    hud: Option<std::process::Child>,
     #[cfg(any(
         target_os = "macos",
         windows,
@@ -78,6 +80,7 @@ impl App {
             models: None,
             voxtype: crate::supervisor::default_daemon_binary(),
             supervisor: Supervisor::disabled(),
+            hud: None,
             #[cfg(any(
                 target_os = "macos",
                 windows,
@@ -89,6 +92,11 @@ impl App {
 
     pub fn with_voxtype(mut self, voxtype: PathBuf) -> Self {
         self.voxtype = voxtype;
+        self
+    }
+
+    pub fn with_hud(mut self, hud: std::process::Child) -> Self {
+        self.hud = Some(hud);
         self
     }
 
@@ -319,6 +327,10 @@ impl eframe::App for App {
     /// Quit (window close or the tray's Quit): stop the daemon if this app
     /// started it.
     fn on_exit(&mut self) {
+        if let Some(mut hud) = self.hud.take() {
+            let _ = hud.kill();
+            let _ = hud.wait();
+        }
         self.supervisor.shutdown();
     }
 }

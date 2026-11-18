@@ -11,6 +11,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod client;
+mod hud;
 mod models;
 mod modes;
 mod settings;
@@ -38,6 +39,8 @@ fn main() -> eframe::Result {
              --tab NAME         open on this tab: home, settings, modes or models\n\
              --no-tray          no tray icon\n\
              --no-supervise     never start, restart or stop the daemon\n\
+             --no-hud           no recording overlay (macOS and Windows)\n\
+             --hud              run only the recording overlay\n\
              --daemon-bin PATH  the voxtype binary for the daemon and downloads\n\
              \x20                  (default: next to this app, else PATH)\n\
              -V, --version\n\
@@ -56,7 +59,11 @@ fn main() -> eframe::Result {
             }
         },
     };
+    if args.iter().any(|a| a == "--hud") {
+        return hud::run(args.iter().any(|a| a == "--hud-exit-with-parent"));
+    }
     let no_tray = args.iter().any(|a| a == "--no-tray");
+    let no_hud = args.iter().any(|a| a == "--no-hud");
     let supervise = !args.iter().any(|a| a == "--no-supervise");
     let daemon_bin = match args.iter().position(|a| a == "--daemon-bin") {
         None => None,
@@ -125,7 +132,25 @@ fn main() -> eframe::Result {
                 all(target_os = "linux", feature = "linux-tray")
             )))]
             let _ = no_tray;
+            // The recording overlay. Linux has voxtype-osd-* (started by
+            // the daemon) instead.
+            if cfg!(any(target_os = "macos", windows)) && !no_hud {
+                match spawn_hud() {
+                    Ok(child) => app = app.with_hud(child),
+                    Err(e) => eprintln!("voxtype-app: no HUD ({e})"),
+                }
+            }
             Ok(Box::new(app))
         }),
     )
+}
+
+/// `voxtype-app --hud` as a child. It exits when its stdin (held here)
+/// closes, so it never outlives the app.
+fn spawn_hud() -> std::io::Result<std::process::Child> {
+    let mut cmd = std::process::Command::new(std::env::current_exe()?);
+    cmd.args(["--hud", "--hud-exit-with-parent"])
+        .stdin(std::process::Stdio::piped());
+    supervisor::prepare_child(&mut cmd);
+    cmd.spawn()
 }
