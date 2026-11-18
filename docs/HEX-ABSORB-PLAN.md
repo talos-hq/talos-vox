@@ -139,6 +139,8 @@ Hex embeds `rquickjs 0.14` plus the `oxc_*` parser stack to strip TS types (`src
 Revisit only if Windows users demonstrably cannot write hooks. Then prefer exposing hooks as PowerShell-friendly before embedding a JS runtime.
 
 ### 4.5 Updater — DEFER until signing exists, then hand-roll the minimal version
+Status and the design for when signing exists: `docs/SELF-UPDATER.md`.
+
 Hex hand-rolls everything (`src/updater/{macos,windows,linux}.rs`):
 - macOS: verifies Developer ID plus notarization, then atomic `renamex_np(RENAME_SWAP)`.
 - Windows: "the download must carry a valid Authenticode signature".
