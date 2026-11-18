@@ -1,3 +1,20 @@
+<div align="center">
+
+<a href="https://talosbot.ai"><img src="https://raw.githubusercontent.com/talos-hq/.github/main/profile/assets/banner-talos-vox.jpg" alt="talos-vox — Intelligence in Motion" width="100%"></a>
+
+**Push-to-talk voice-to-text for Wayland compositors, local by default. Talos HQ's fork of [Voxtype](https://github.com/peteonrails/voxtype).**
+
+<a href="https://talosbot.ai"><img src="https://img.shields.io/badge/talosbot.ai-C89B63?style=for-the-badge&labelColor=0B0D10" alt="talosbot.ai"></a>
+
+</div>
+
+> [!NOTE]
+> **Install.** This fork has no releases of its own: build it from source with the [Quick Start](#quick-start) below (`cargo build --release`). The prebuilt packages in [docs/INSTALL.md](docs/INSTALL.md) (AUR, `.deb`, `.rpm`, Homebrew) install upstream Voxtype.
+
+<sub>Talos HQ's header ends here. The upstream Voxtype README follows.</sub>
+
+---
+
 # Voxtype
 
 [![Voxtype - Voice to Text for Linux](website/images/og-preview.png)](https://voxtype.io)
