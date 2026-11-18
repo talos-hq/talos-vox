@@ -12,12 +12,132 @@ use crate::config::{Config, LanguageConfig, WhisperConfig};
 use crate::error::TranscribeError;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+use whisper_rs::{
+    FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
+};
+
+/// Whether this build can run whisper.cpp on a GPU at all.
+const GPU_BUILD: bool = cfg!(any(
+    feature = "gpu-cuda",
+    feature = "gpu-vulkan",
+    feature = "gpu-metal",
+    feature = "gpu-hipblas"
+));
+
+/// GPU memory that must still be free once a decoding state is allocated.
+///
+/// The patched whisper.cpp returns an error when the model, KV cache or
+/// compute buffers don't fit, but ggml-cuda also grows a memory pool while it
+/// computes, and aborts the process if that fails (`ggml-cuda.cu`
+/// `CUDA error: out of memory` in `cuMemCreate`); upstream does the same. On
+/// an RTX 2080 Ti with large-v3-turbo, inference aborted with about 80 MiB
+/// left after the state and ran with about 200 MiB. This is a heuristic: free
+/// memory can change between this check and the next inference.
+const GPU_HEADROOM_BYTES: usize = 256 << 20;
+
+/// Free memory on the GPU whisper.cpp runs on: the `gpu_device`-th GPU or
+/// iGPU in ggml's device list, as `whisper_backend_init_gpu` counts them.
+/// `None` if there's no such device or its backend doesn't report memory.
+fn gpu_free_bytes(gpu_device: i32) -> Option<usize> {
+    use whisper_rs::whisper_rs_sys as sys;
+    let mut nth = 0;
+    // SAFETY: read-only queries of ggml's global device registry, whose
+    // devices live for the whole process.
+    unsafe {
+        for i in 0..sys::ggml_backend_dev_count() {
+            let dev = sys::ggml_backend_dev_get(i);
+            let kind = sys::ggml_backend_dev_type(dev);
+            if kind != sys::ggml_backend_dev_type_GGML_BACKEND_DEVICE_TYPE_GPU
+                && kind != sys::ggml_backend_dev_type_GGML_BACKEND_DEVICE_TYPE_IGPU
+            {
+                continue;
+            }
+            if nth == gpu_device {
+                let (mut free, mut total) = (0usize, 0usize);
+                sys::ggml_backend_dev_memory(dev, &mut free, &mut total);
+                return (total > 0).then_some(free);
+            }
+            nth += 1;
+        }
+    }
+    None
+}
+
+/// How to load the model, kept so it can be reloaded on CPU.
+struct ModelLoad {
+    path: String,
+    gpu_device: Option<i32>,
+    flash_attention: bool,
+}
+
+impl ModelLoad {
+    /// Load the model on the GPU or the CPU and check that a decoding state
+    /// (KV cache and compute buffers) fits next to it.
+    ///
+    /// whisper.cpp is patched (talos-hq/whisper-rs-sys, see Cargo.toml) so
+    /// that both allocations fail with an error rather than aborting or
+    /// segfaulting when memory runs out (#4). Checking a state here catches
+    /// a model that fits on a nearly full GPU but leaves no room to decode,
+    /// while there's still time to fall back to CPU.
+    fn load(&self, gpu: bool) -> Result<WhisperContext, TranscribeError> {
+        let where_ = if gpu { "GPU" } else { "CPU" };
+        let mut params = WhisperContextParameters::default();
+        params.use_gpu(gpu);
+        if gpu {
+            if let Some(device) = self.gpu_device {
+                params.gpu_device(device);
+            }
+        }
+        params.flash_attn(self.flash_attention);
+
+        let ctx = WhisperContext::new_with_params(&self.path, params).map_err(|e| {
+            TranscribeError::InitFailed(format!(
+                "whisper.cpp could not load the model on {where_} ({e}); \
+                 see the whisper.cpp log above for the allocation that failed"
+            ))
+        })?;
+        let state = ctx.create_state().map_err(|e| {
+            TranscribeError::InitFailed(format!(
+                "whisper.cpp loaded the model on {where_} but could not allocate \
+                 its decoding state ({e})"
+            ))
+        })?;
+        if gpu {
+            self.check_gpu_headroom()
+                .map_err(TranscribeError::InitFailed)?;
+        }
+        drop(state);
+        Ok(ctx)
+    }
+
+    /// With a decoding state allocated on the GPU, check that enough memory
+    /// is left for inference ([`GPU_HEADROOM_BYTES`]).
+    fn check_gpu_headroom(&self) -> Result<(), String> {
+        match gpu_free_bytes(self.gpu_device.unwrap_or(0)) {
+            Some(free) if free < GPU_HEADROOM_BYTES => Err(format!(
+                "only {} MiB of GPU memory is left after whisper.cpp's decoding \
+                 state, under the {} MiB that inference needs to run safely",
+                free >> 20,
+                GPU_HEADROOM_BYTES >> 20
+            )),
+            _ => Ok(()),
+        }
+    }
+}
+
+/// The loaded model and whether it's on the GPU.
+struct LoadedModel {
+    ctx: WhisperContext,
+    on_gpu: bool,
+}
 
 /// Whisper-based transcriber
 pub struct WhisperTranscriber {
-    /// Whisper context (holds the model)
-    ctx: WhisperContext,
+    /// Whisper context (holds the model). Swapped for a CPU context if the
+    /// GPU later can't fit a decoding state.
+    model: Mutex<LoadedModel>,
+    /// How the model was loaded, for that CPU reload.
+    load: ModelLoad,
     /// Language configuration (single, auto, or array)
     language: LanguageConfig,
     /// Whether to translate to English
@@ -44,7 +164,6 @@ impl WhisperTranscriber {
         tracing::info!("Loading whisper model from {:?}", model_path);
         let start = std::time::Instant::now();
 
-        let mut ctx_params = WhisperContextParameters::default();
         // An explicit gpu_device always wins. Otherwise, if the user asked for
         // a vendor with VOXTYPE_VULKAN_DEVICE, resolve that to an index and
         // set it: the loader hint alone has been observed not to take effect,
@@ -74,27 +193,36 @@ impl WhisperTranscriber {
         });
         if let Some(device) = device_index {
             tracing::info!("Using GPU device index {}", device);
-            ctx_params.gpu_device(device);
         }
-        ctx_params.flash_attn(config.flash_attention);
         if config.flash_attention {
             tracing::info!("Flash attention enabled");
         }
 
-        let ctx = WhisperContext::new_with_params(
-            model_path
+        let load = ModelLoad {
+            path: model_path
                 .to_str()
-                .ok_or_else(|| TranscribeError::ModelNotFound("Invalid path".to_string()))?,
-            ctx_params,
-        )
-        .map_err(|e| TranscribeError::InitFailed(e.to_string()))?;
+                .ok_or_else(|| TranscribeError::ModelNotFound("Invalid path".to_string()))?
+                .to_string(),
+            gpu_device: device_index,
+            flash_attention: config.flash_attention,
+        };
+
+        // On a GPU that's too full for the model or its decoding state,
+        // load on CPU instead (#4). With CUDA_VISIBLE_DEVICES hiding every
+        // device, ggml would fall back by itself; skip the GPU attempt.
+        let gpu =
+            GPU_BUILD && !(cfg!(feature = "gpu-cuda") && super::gpu_fallback::cuda_hidden_by_env());
+        let (ctx, on_gpu) = super::gpu_fallback::init_with_cpu_fallback("Whisper", gpu, |gpu| {
+            load.load(gpu).map(|ctx| (ctx, gpu))
+        })?;
 
         tracing::info!("Model loaded in {:.2}s", start.elapsed().as_secs_f32());
 
         let threads = config.threads.unwrap_or_else(|| num_cpus::get().min(4));
 
         Ok(Self {
-            ctx,
+            model: Mutex::new(LoadedModel { ctx, on_gpu }),
+            load,
             language: config.language.clone(),
             translate: config.translate,
             threads,
@@ -102,6 +230,50 @@ impl WhisperTranscriber {
             initial_prompt: config.initial_prompt.clone(),
             last_language: Mutex::new(None),
         })
+    }
+
+    /// A fresh decoding state for one transcription.
+    ///
+    /// If the GPU no longer has room for one (another process took the
+    /// memory since the model loaded), reload the model on CPU, keep using it
+    /// from then on, and release the GPU copy (#4).
+    fn create_state(&self) -> Result<WhisperState, TranscribeError> {
+        let mut model = self
+            .model
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let gpu_err = match model.ctx.create_state() {
+            Ok(state) if !model.on_gpu => return Ok(state),
+            Ok(state) => match self.load.check_gpu_headroom() {
+                Ok(()) => return Ok(state),
+                Err(e) => e,
+            },
+            Err(e) if model.on_gpu => e.to_string(),
+            Err(e) => {
+                return Err(TranscribeError::InferenceFailed(format!(
+                    "whisper.cpp could not allocate its decoding state ({e})"
+                )))
+            }
+        };
+        tracing::warn!(
+            "Whisper: could not allocate a decoding state on the GPU ({gpu_err}); \
+             reloading the model on CPU"
+        );
+        let cpu = self.load.load(false).map_err(|e| {
+            TranscribeError::InferenceFailed(format!(
+                "the GPU ran out of memory for whisper.cpp's decoding state ({gpu_err}) \
+                 and the CPU reload failed too: {e}"
+            ))
+        })?;
+        let state = cpu
+            .create_state()
+            .map_err(|e| TranscribeError::InferenceFailed(e.to_string()))?;
+        *model = LoadedModel {
+            ctx: cpu,
+            on_gpu: false,
+        };
+        tracing::warn!("Whisper: running on CPU from now on");
+        Ok(state)
     }
 
     fn build_params<'a, 'b>(
@@ -176,10 +348,7 @@ impl WhisperTranscriber {
         duration_secs: f32,
         retry: bool,
     ) -> Result<String, TranscribeError> {
-        let mut state = self
-            .ctx
-            .create_state()
-            .map_err(|e| TranscribeError::InferenceFailed(e.to_string()))?;
+        let mut state = self.create_state()?;
         let params = self.build_params(selected_language, duration_secs, retry);
 
         state
@@ -276,12 +445,6 @@ impl Transcriber for WhisperTranscriber {
 
         let start = std::time::Instant::now();
 
-        // Create state for this transcription
-        let mut state = self
-            .ctx
-            .create_state()
-            .map_err(|e| TranscribeError::InferenceFailed(e.to_string()))?;
-
         // Determine language based on configuration mode
         let selected_language: Option<String> = if self.language.is_auto() {
             // Unconstrained auto-detection: let Whisper detect from all languages
@@ -291,6 +454,9 @@ impl Transcriber for WhisperTranscriber {
             // Constrained auto-detection: detect from allowed set only
             let allowed = self.language.as_vec();
             tracing::debug!("Using constrained language detection from: {:?}", allowed);
+            // This state only lives for the detection, so it doesn't hold
+            // GPU memory while run_full allocates its own.
+            let mut state = self.create_state()?;
             Some(self.select_language_from_allowed(&mut state, samples, &allowed)?)
         } else {
             // Single language: use it directly

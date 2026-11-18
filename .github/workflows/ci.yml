@@ -48,6 +48,13 @@ jobs:
       - name: cargo clippy -- -D warnings
         run: cargo clippy --all-targets --no-deps -- -D warnings
 
+      - uses: zackees/setup-soldr@v0
+
+      # Parakeet's GPU paths (the CPU fallback from #4) are only compiled with
+      # these features. load-dynamic needs no ONNX Runtime at build time.
+      - name: clippy (parakeet-load-dynamic,parakeet-cuda)
+        run: soldr cargo clippy --all-targets --no-deps --features parakeet-load-dynamic,parakeet-cuda -- -D warnings
+
   test:
     name: test
     runs-on: ubuntu-latest
