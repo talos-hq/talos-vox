@@ -7,6 +7,7 @@
 
 mod commands;
 mod config;
+mod history;
 mod info;
 mod meeting;
 mod record;
@@ -15,6 +16,7 @@ mod setup;
 
 pub use commands::Commands;
 pub use config::ConfigAction;
+pub use history::HistoryAction;
 pub use info::InfoAction;
 pub use meeting::MeetingAction;
 pub use record::{OutputModeOverride, RecordAction};

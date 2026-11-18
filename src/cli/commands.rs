@@ -3,7 +3,7 @@
 use clap::builder::PossibleValuesParser;
 use clap::Subcommand;
 
-use super::{ConfigAction, InfoAction, MeetingAction, RecordAction, SetupAction};
+use super::{ConfigAction, HistoryAction, InfoAction, MeetingAction, RecordAction, SetupAction};
 
 #[derive(Subcommand)]
 pub enum Commands {
@@ -171,6 +171,30 @@ pub enum Commands {
 
     /// Check for updates
     CheckUpdate,
+
+    /// Show or clear dictation history
+    ///
+    /// History is off by default. Enable it in config.toml:
+    ///
+    ///   [history]
+    ///   enabled = true        # record each dictation's final text
+    ///   retention_days = 7    # 0 = no age limit
+    ///   max_entries = 500
+    ///
+    /// Only text is stored, never audio, in the per-OS state directory
+    /// (Linux: ~/.local/state/voxtype/history.db).
+    History {
+        #[command(subcommand)]
+        action: HistoryAction,
+    },
+
+    /// Type the most recent dictation again
+    ///
+    /// Sends the newest history entry through the configured output chain,
+    /// as if it had just been dictated. Needs [history] enabled = true.
+    /// Bind it to a key, e.g. Hyprland:
+    ///   bind = SUPER CTRL, V, exec, voxtype paste-last
+    PasteLast,
 
     /// Serve the Model Context Protocol on stdin/stdout
     ///

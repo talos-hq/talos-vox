@@ -3158,6 +3158,44 @@ min_speech_duration_ms = 200  # Require at least 200ms of speech
 
 ---
 
+## [history]
+
+An opt-in local log of finished dictations, used by `voxtype history` and
+`voxtype paste-last`. It is off by default. Only the final text is stored
+(after replacements and post-processing), together with the engine and model.
+Audio is never stored.
+
+```toml
+[history]
+enabled = false        # record each dictation
+retention_days = 7     # drop entries older than this; 0 = no age limit
+max_entries = 500      # keep at most this many, newest first
+redact = []            # regexes replaced with [redacted] before storing
+```
+
+The database is `history.db` in the per-OS state directory. It is created
+mode 0600 on Unix:
+
+| OS | Path |
+|----|------|
+| Linux | `$XDG_STATE_HOME/voxtype/history.db` (default `~/.local/state/voxtype/`) |
+| macOS | `~/Library/Application Support/voxtype/history.db` |
+| Windows | `%LOCALAPPDATA%\voxtype\history.db` |
+
+Pruning to `retention_days` and `max_entries` runs when the daemon starts, at
+most once an hour after that, and whenever `voxtype history` reads the log.
+
+```sh
+voxtype history list            # newest first; -n 50, --json
+voxtype history last            # just the text (exit 3 if empty)
+voxtype history clear
+voxtype paste-last              # type the last dictation again
+```
+
+`paste-last` sends the entry through the same output chain as a dictation,
+including the pre- and post-output hooks. Bind it to a key the same way you
+bind `voxtype record`.
+
 ## [meeting]
 
 Meeting mode configuration. Meeting mode provides continuous transcription with chunked processing, speaker diarization, and export capabilities.
