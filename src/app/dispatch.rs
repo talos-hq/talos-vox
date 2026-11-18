@@ -463,6 +463,11 @@ pub(crate) async fn dispatch(
         Commands::CheckUpdate => {
             check_for_updates().await?;
         }
+
+        #[cfg(feature = "mcp")]
+        Commands::Mcp => {
+            super::mcp::run_mcp(config).await?;
+        }
     }
 
     Ok(())
