@@ -1,5 +1,6 @@
 //! The main window: a Home tab (daemon state, start/stop, history), and
-//! the Settings and Modes editors.
+//! the Settings and Modes editors. Also drives the tray and owns the
+//! daemon supervisor.
 
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
@@ -9,6 +10,13 @@ use eframe::egui;
 use crate::client::{DaemonState, History, Request, Snapshot};
 use crate::modes::Modes;
 use crate::settings::Settings;
+use crate::supervisor::{Status, Supervisor};
+#[cfg(any(
+    target_os = "macos",
+    windows,
+    all(target_os = "linux", feature = "linux-tray")
+))]
+use crate::tray;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
@@ -38,6 +46,13 @@ pub struct App {
     // Loaded when their tab is first opened.
     settings: Option<Settings>,
     modes: Option<Modes>,
+    supervisor: Supervisor,
+    #[cfg(any(
+        target_os = "macos",
+        windows,
+        all(target_os = "linux", feature = "linux-tray")
+    ))]
+    tray: Option<(tray::Tray, Receiver<tray::Action>)>,
 }
 
 impl App {
@@ -54,7 +69,62 @@ impl App {
             config_path,
             settings: None,
             modes: None,
+            supervisor: Supervisor::disabled(),
+            #[cfg(any(
+                target_os = "macos",
+                windows,
+                all(target_os = "linux", feature = "linux-tray")
+            ))]
+            tray: None,
         }
+    }
+
+    pub fn with_supervisor(mut self, supervisor: Supervisor) -> Self {
+        self.supervisor = supervisor;
+        self
+    }
+
+    #[cfg(any(
+        target_os = "macos",
+        windows,
+        all(target_os = "linux", feature = "linux-tray")
+    ))]
+    pub fn with_tray(mut self, tray: tray::Tray, actions: Receiver<tray::Action>) -> Self {
+        self.tray = Some((tray, actions));
+        self
+    }
+
+    /// Act on tray clicks and refresh the tray from the latest state.
+    #[cfg(any(
+        target_os = "macos",
+        windows,
+        all(target_os = "linux", feature = "linux-tray")
+    ))]
+    fn sync_tray(&mut self, ctx: &egui::Context) {
+        let Some((tray, actions)) = &mut self.tray else {
+            return;
+        };
+        while let Ok(action) = actions.try_recv() {
+            match action {
+                tray::Action::Toggle => match recording(&self.snap.daemon) {
+                    Some(true) => {
+                        let _ = self.requests.send(Request::Stop);
+                    }
+                    Some(false) => {
+                        let _ = self.requests.send(Request::Start);
+                    }
+                    None => {}
+                },
+                tray::Action::Show => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
+                tray::Action::RestartDaemon => self.supervisor.restart(),
+                tray::Action::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            }
+        }
+        tray.update(tray_view(&self.snap.daemon, &self.supervisor.status()));
     }
 
     fn send(&self, req: Request) {
@@ -78,6 +148,12 @@ impl App {
     /// bare `egui::Context`, with no window or GPU.
     pub fn show(&mut self, ui: &mut egui::Ui) {
         self.drain();
+        #[cfg(any(
+            target_os = "macos",
+            windows,
+            all(target_os = "linux", feature = "linux-tray")
+        ))]
+        self.sync_tray(&ui.ctx().clone());
 
         egui::Panel::top("tabs").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
@@ -116,25 +192,37 @@ impl App {
                 ui.colored_label(color, "\u{25CF}");
                 ui.heading(label);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let state = match &self.snap.daemon {
-                        DaemonState::Running(s) => Some(s.as_str()),
-                        _ => None,
-                    };
-                    let stop =
-                        ui.add_enabled(state == Some("recording"), egui::Button::new("Stop"));
+                    let rec = recording(&self.snap.daemon);
+                    let stop = ui.add_enabled(rec == Some(true), egui::Button::new("Stop"));
                     if stop.clicked() {
                         self.send(Request::Stop);
                     }
-                    let start = ui.add_enabled(state == Some("idle"), egui::Button::new("Start"));
+                    let start = ui.add_enabled(rec == Some(false), egui::Button::new("Start"));
                     if start.clicked() {
                         self.send(Request::Start);
                     }
                 });
             });
+            let supervisor = self.supervisor.status();
             if let DaemonState::Unreachable(why) = &self.snap.daemon {
                 ui.small(why.as_str());
-                ui.small("Start it with `voxtype daemon` (or your service manager).");
+                if matches!(supervisor, Status::Disabled | Status::External) {
+                    ui.small("Start it with `voxtype daemon` (or your service manager).");
+                }
             }
+            ui.horizontal(|ui| {
+                ui.small(supervisor.describe());
+                if supervisor.owned() {
+                    let label = if matches!(supervisor, Status::Running { .. }) {
+                        "Restart daemon"
+                    } else {
+                        "Start daemon"
+                    };
+                    if ui.small_button(label).clicked() {
+                        self.supervisor.restart();
+                    }
+                }
+            });
             if let Some(err) = &self.snap.last_error {
                 ui.colored_label(ui.visuals().error_fg_color, err.as_str());
             }
@@ -186,6 +274,48 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.show(ui);
+        // A supervisor countdown or restart needs a frame even when the
+        // daemon state itself is unchanged.
+        if self.supervisor.status().owned() {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_secs(1));
+        }
+    }
+
+    /// Quit (window close or the tray's Quit): stop the daemon if this app
+    /// started it.
+    fn on_exit(&mut self) {
+        self.supervisor.shutdown();
+    }
+}
+
+/// `Some(recording?)` when start/stop applies, `None` when it doesn't.
+fn recording(state: &DaemonState) -> Option<bool> {
+    match state {
+        DaemonState::Running(s) if s == "recording" => Some(true),
+        DaemonState::Running(s) if s == "idle" => Some(false),
+        _ => None,
+    }
+}
+
+#[cfg(any(
+    target_os = "macos",
+    windows,
+    all(target_os = "linux", feature = "linux-tray")
+))]
+fn tray_view(daemon: &DaemonState, supervisor: &Status) -> tray::View {
+    let light = match daemon {
+        DaemonState::Running(s) if s == "recording" => tray::Light::Recording,
+        DaemonState::Running(s) if s == "transcribing" => tray::Light::Transcribing,
+        DaemonState::Running(_) => tray::Light::Idle,
+        _ => tray::Light::Down,
+    };
+    tray::View {
+        light,
+        status: format!("Voxtype: {}", state_label(daemon).0),
+        supervisor: supervisor.describe(),
+        recording: recording(daemon),
+        can_restart: supervisor.owned(),
     }
 }
 
@@ -275,6 +405,44 @@ mod tests {
             frame(&mut app);
         }
         assert!(app.settings.is_some() && app.modes.is_some());
+    }
+
+    #[test]
+    fn start_stop_applies_only_when_idle_or_recording() {
+        assert_eq!(recording(&DaemonState::Running("idle".into())), Some(false));
+        assert_eq!(
+            recording(&DaemonState::Running("recording".into())),
+            Some(true)
+        );
+        assert_eq!(
+            recording(&DaemonState::Running("transcribing".into())),
+            None
+        );
+        assert_eq!(recording(&DaemonState::Unknown), None);
+    }
+
+    #[cfg(any(
+        target_os = "macos",
+        windows,
+        all(target_os = "linux", feature = "linux-tray")
+    ))]
+    #[test]
+    fn tray_view_follows_the_daemon() {
+        let v = tray_view(
+            &DaemonState::Running("recording".into()),
+            &Status::Running {
+                pid: 9,
+                restarts: 0,
+            },
+        );
+        assert_eq!(v.light, tray::Light::Recording);
+        assert_eq!(v.status, "Voxtype: Recording");
+        assert_eq!(v.recording, Some(true));
+        assert!(v.can_restart);
+        let v = tray_view(&DaemonState::Unreachable("x".into()), &Status::External);
+        assert_eq!(v.light, tray::Light::Down);
+        assert_eq!(v.recording, None);
+        assert!(!v.can_restart);
     }
 
     #[test]

@@ -3,7 +3,7 @@ name = "voxtype-app"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "Desktop app for the voxtype daemon (egui): status, start/stop and history over the control protocol"
+description = "Desktop app for the voxtype daemon (egui): tray, daemon supervisor, status, history, settings and modes"
 publish = false
 
 # Not in the root's default-members: `cargo build` / `cargo test` at the repo
@@ -20,9 +20,32 @@ chrono = "0.4"
 # [[modes]] is an array of tables the scalar config schema does not cover.
 toml_edit = "0.22"
 
+[features]
+default = []
+# The tray icon on Linux: needs GTK 3 and libayatana-appindicator3 at build
+# and run time, and a StatusNotifier host to show it. macOS and Windows
+# always get the tray.
+linux-tray = ["dep:tray-icon", "dep:gtk"]
+
+[target.'cfg(unix)'.dependencies]
+# SIGTERM to the supervised daemon, PR_SET_PDEATHSIG on Linux.
+libc = "0.2"
+
+[target.'cfg(any(target_os = "macos", windows))'.dependencies]
+# Same crate and version as `voxtype menubar` (src/menubar.rs). No libxdo:
+# the menu has no accelerators.
+tray-icon = { version = "0.21.3", default-features = false }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tray-icon = { version = "0.21.3", default-features = false, optional = true }
+gtk = { version = "0.18", optional = true }
+
 # The control channel on non-Unix hosts is a kernal-api named pipe.
 [target.'cfg(windows)'.dependencies]
 voxtype = { path = "../..", features = ["kernal-api"] }
+# The Terminate control signal for a graceful daemon stop. Same pin as the
+# root crate.
+kernal-api = { git = "https://github.com/forge-ci/kernal-api", rev = "56544cee564b3c063a8e71a6b3b76d2d1bcb669b", features = ["control-signal"] }
 
 [dev-dependencies]
 tempfile = "3"
