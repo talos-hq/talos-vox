@@ -4,12 +4,14 @@ on:
   push:
     branches: [main, dev]
   pull_request:
+  # dev merges through a merge queue; the queue waits for `ci-success` on the
+  # merge_group run before it lands a group.
+  merge_group:
 
 # Three parallel jobs (fmt, clippy, test) instead of a single sequential `check`.
 # Each runs on its own runner so a 4 min clippy run doesn't block a 30 s fmt
-# check, and PR failures attribute to the specific gate that broke. Required
-# status checks on dev (PR-time) and main (release-time) reference all three
-# job names; if you rename or remove one here, update branch protection.
+# check, and PR failures attribute to the specific gate that broke. The dev
+# ruleset requires only the `ci-success` aggregator at the bottom.
 
 jobs:
   fmt:
@@ -120,27 +122,62 @@ jobs:
         if: runner.os == 'Windows'
         run: soldr cargo test --features kernal-api --lib windows_autostart
 
-  # Aggregator job — branch protection only needs to require `ci-success`.
-  # Adding/removing parallel checks above just updates the `needs:` list;
-  # the protection rule never needs to be touched.
+  # Aggregator job: the dev ruleset requires only `ci-success` (through the
+  # merge queue). Adding/removing parallel checks above just updates the
+  # `needs:` list; the ruleset never needs to be touched.
+  #
+  # Every job must succeed, with one exception: GitHub's hosted macOS runners
+  # sometimes run out of capacity and cancel a job that never got a runner
+  # ("The job was not acquired by Runner of type hosted even after multiple
+  # attempts"). A kernal-api (macos-latest) job that ended `cancelled` with no
+  # runner assigned is reported as a warning instead of failing the gate.
+  # Windows stays strictly required, and a macOS job that did get a runner and
+  # then failed, timed out or was cancelled still fails the gate.
   ci-success:
     name: ci-success
     needs: [fmt, clippy, test, kernal-api]
     if: always()
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
     steps:
       - name: Verify all required jobs succeeded
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FMT: ${{ needs.fmt.result }}
+          CLIPPY: ${{ needs.clippy.result }}
+          TEST: ${{ needs.test.result }}
+          KERNAL: ${{ needs.kernal-api.result }}
         run: |
-          set -e
-          fmt='${{ needs.fmt.result }}'
-          clippy='${{ needs.clippy.result }}'
-          test='${{ needs.test.result }}'
-          kernal='${{ needs.kernal-api.result }}'
-          echo "fmt:        $fmt"
-          echo "clippy:     $clippy"
-          echo "test:       $test"
-          echo "kernal-api: $kernal"
-          if [[ "$fmt" != success || "$clippy" != success || "$test" != success || "$kernal" != success ]]; then
+          set -euo pipefail
+          echo "fmt:        $FMT"
+          echo "clippy:     $CLIPPY"
+          echo "test:       $TEST"
+          echo "kernal-api: $KERNAL"
+          fail=0
+          for r in "$FMT" "$CLIPPY" "$TEST"; do
+            [[ "$r" == success ]] || fail=1
+          done
+          if [[ "$KERNAL" != success ]]; then
+            # needs.kernal-api.result aggregates the matrix; inspect each leg
+            # of this run attempt through the API.
+            jobs=$(gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs?per_page=100" \
+              --jq '.jobs[] | select(.name | startswith("kernal-api (")) | [.name, (.conclusion // "none"), (.runner_name // "")] | @tsv')
+            for os in windows-latest macos-latest; do
+              line=$(printf '%s\n' "$jobs" | awk -F'\t' -v n="kernal-api ($os)" '$1 == n' | tail -n 1)
+              conclusion=$(printf '%s' "$line" | cut -f2)
+              runner=$(printf '%s' "$line" | cut -f3)
+              echo "kernal-api ($os): conclusion=${conclusion:-missing} runner=${runner:-<none>}"
+              [[ "$conclusion" == success ]] && continue
+              if [[ "$os" == macos-latest && "$conclusion" == cancelled && -z "$runner" ]]; then
+                echo "::warning::kernal-api (macos-latest) was cancelled before any hosted runner picked it up (runner capacity); not blocking."
+                continue
+              fi
+              fail=1
+            done
+          fi
+          if [[ "$fail" != 0 ]]; then
             echo "::error::One or more required jobs failed"
             exit 1
           fi
