@@ -10,6 +10,7 @@
 //! - Sway (`SWAYSOCK`): `swaymsg -t get_tree`, the focused node.
 //! - X11 sessions (`XDG_SESSION_TYPE=x11`, or `DISPLAY` without
 //!   `WAYLAND_DISPLAY`): `xprop` on `_NET_ACTIVE_WINDOW`.
+//! - macOS: the frontmost app's bundle identifier (`lsappinfo`). No title.
 //!
 //! Everywhere else (GNOME and KDE on Wayland, which expose no focus
 //! protocol to clients) there is no snapshot: the variables are unset and
@@ -17,6 +18,7 @@
 //! this session reports.
 
 mod hyprland;
+mod macos;
 mod sway;
 mod x11;
 
@@ -133,6 +135,9 @@ pub fn probe_for(session: &Session) -> Option<Box<dyn FocusProbe>> {
 
 /// The probe for the current session, if any.
 pub fn detect() -> Option<Box<dyn FocusProbe>> {
+    if cfg!(target_os = "macos") {
+        return Some(Box::new(macos::MacOs));
+    }
     probe_for(&Session::from_env())
 }
 
@@ -213,6 +218,19 @@ mod tests {
             ..Session::default()
         };
         assert_eq!(pick(bare), Some("x11"));
+    }
+
+    /// Runs on the macOS CI runner: the probe is picked and answers
+    /// without panicking (a headless runner may have no frontmost app).
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_probe_runs() {
+        let probe = detect().expect("macOS always has a probe");
+        assert_eq!(probe.name(), "macos");
+        if let Some(app) = probe.snapshot() {
+            assert!(!app.app_id.is_empty());
+            assert_eq!(app.source, "macos");
+        }
     }
 
     #[test]

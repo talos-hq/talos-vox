@@ -107,6 +107,8 @@ jobs:
         run: soldr cargo check --features kernal-api --lib --keep-going
       - name: kernal-api capture tests
         run: soldr cargo test --features kernal-api --lib audio::kernal_capture
+      - name: focus probe tests
+        run: 'soldr cargo test --features kernal-api --lib context::'
 
   # Aggregator job: the dev ruleset requires only `ci-success` (through the
   # merge queue). Adding/removing parallel checks above just updates the
