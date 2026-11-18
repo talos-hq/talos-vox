@@ -1,0 +1,212 @@
+//! The main window: daemon state, start/stop, and the history list.
+
+use std::sync::mpsc::{Receiver, Sender};
+
+use eframe::egui;
+
+use crate::client::{DaemonState, History, Request, Snapshot};
+
+pub struct App {
+    requests: Sender<Request>,
+    snapshots: Receiver<Snapshot>,
+    snap: Snapshot,
+}
+
+impl App {
+    pub fn new(requests: Sender<Request>, snapshots: Receiver<Snapshot>) -> Self {
+        Self {
+            requests,
+            snapshots,
+            snap: Snapshot::default(),
+        }
+    }
+
+    fn send(&self, req: Request) {
+        // The worker only stops when the app does.
+        let _ = self.requests.send(req);
+    }
+
+    /// Take the worker's latest snapshot, if any.
+    fn drain(&mut self) {
+        while let Ok(snap) = self.snapshots.try_recv() {
+            self.snap = snap;
+        }
+    }
+
+    /// Draw one frame. Separate from `eframe::App` so tests can run it on a
+    /// bare `egui::Context`, with no window or GPU.
+    pub fn show(&mut self, ui: &mut egui::Ui) {
+        self.drain();
+
+        egui::Panel::top("status").show_inside(ui, |ui| {
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                let (label, color) = state_label(&self.snap.daemon);
+                ui.colored_label(color, "\u{25CF}");
+                ui.heading(label);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let state = match &self.snap.daemon {
+                        DaemonState::Running(s) => Some(s.as_str()),
+                        _ => None,
+                    };
+                    let stop =
+                        ui.add_enabled(state == Some("recording"), egui::Button::new("Stop"));
+                    if stop.clicked() {
+                        self.send(Request::Stop);
+                    }
+                    let start = ui.add_enabled(state == Some("idle"), egui::Button::new("Start"));
+                    if start.clicked() {
+                        self.send(Request::Start);
+                    }
+                });
+            });
+            if let DaemonState::Unreachable(why) = &self.snap.daemon {
+                ui.small(why.as_str());
+                ui.small("Start it with `voxtype daemon` (or your service manager).");
+            }
+            if let Some(err) = &self.snap.last_error {
+                ui.colored_label(ui.visuals().error_fg_color, err.as_str());
+            }
+            ui.add_space(6.0);
+        });
+
+        egui::CentralPanel::default().show_inside(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.heading("History");
+                if ui.small_button("Refresh").clicked() {
+                    self.send(Request::RefreshHistory);
+                }
+            });
+            ui.separator();
+            match &self.snap.history {
+                History::Disabled => {
+                    ui.label(
+                        "History is off. Set `[history] enabled = true` in config.toml \
+                         to keep recent dictations (text only, never audio).",
+                    );
+                }
+                History::Error(e) => {
+                    ui.colored_label(ui.visuals().error_fg_color, e.as_str());
+                }
+                History::Entries(entries) if entries.is_empty() => {
+                    ui.label("No dictations yet.");
+                }
+                History::Entries(entries) => {
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            for e in entries {
+                                ui.horizontal_wrapped(|ui| {
+                                    if ui.small_button("Copy").clicked() {
+                                        ui.ctx().copy_text(e.text.clone());
+                                    }
+                                    ui.weak(format_time(e.created_at_ms));
+                                    ui.label(e.text.as_str());
+                                });
+                                ui.separator();
+                            }
+                        });
+                }
+            }
+        });
+    }
+}
+
+impl eframe::App for App {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.show(ui);
+    }
+}
+
+fn state_label(state: &DaemonState) -> (String, egui::Color32) {
+    match state {
+        DaemonState::Unknown => ("Connecting...".into(), egui::Color32::GRAY),
+        DaemonState::Unreachable(_) => ("Daemon not running".into(), egui::Color32::GRAY),
+        DaemonState::Running(s) => {
+            let color = match s.as_str() {
+                "recording" => egui::Color32::from_rgb(0xd9, 0x3f, 0x3f),
+                "transcribing" => egui::Color32::from_rgb(0xe0, 0xa0, 0x30),
+                _ => egui::Color32::from_rgb(0x3f, 0xa8, 0x5a),
+            };
+            let mut label = s.clone();
+            if let Some(first) = label.get_mut(0..1) {
+                first.make_ascii_uppercase();
+            }
+            (label, color)
+        }
+    }
+}
+
+/// Local wall-clock time of a history entry.
+fn format_time(ms: i64) -> String {
+    use chrono::TimeZone;
+    match chrono::Local.timestamp_millis_opt(ms) {
+        chrono::LocalResult::Single(t) => t.format("%Y-%m-%d %H:%M").to_string(),
+        _ => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+    use voxtype::history::Entry;
+
+    fn frame(app: &mut App) {
+        let ctx = egui::Context::default();
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| app.show(ui));
+    }
+
+    #[test]
+    fn renders_every_state_headless() {
+        let (req_tx, _req_rx) = mpsc::channel();
+        let (snap_tx, snap_rx) = mpsc::channel();
+        let mut app = App::new(req_tx, snap_rx);
+        frame(&mut app);
+        let entry = Entry {
+            id: 1,
+            created_at_ms: 1_700_000_000_000,
+            text: "hello".into(),
+            engine: "whisper".into(),
+            model: "base.en".into(),
+        };
+        for (daemon, history) in [
+            (
+                DaemonState::Unreachable("no socket".into()),
+                History::Disabled,
+            ),
+            (
+                DaemonState::Running("idle".into()),
+                History::Entries(vec![]),
+            ),
+            (
+                DaemonState::Running("recording".into()),
+                History::Entries(vec![entry]),
+            ),
+            (
+                DaemonState::Running("transcribing".into()),
+                History::Error("locked".into()),
+            ),
+        ] {
+            snap_tx
+                .send(Snapshot {
+                    daemon: daemon.clone(),
+                    history,
+                    last_error: Some("x".into()),
+                })
+                .unwrap();
+            frame(&mut app);
+            assert_eq!(app.snap.daemon, daemon);
+        }
+    }
+
+    #[test]
+    fn labels() {
+        assert_eq!(state_label(&DaemonState::Running("idle".into())).0, "Idle");
+        assert_eq!(
+            state_label(&DaemonState::Unreachable(String::new())).0,
+            "Daemon not running"
+        );
+        assert_eq!(format_time(0).len(), "1970-01-01 00:00".len());
+    }
+}

@@ -129,6 +129,45 @@ jobs:
         if: runner.os == 'Windows'
         run: soldr cargo test --features kernal-api --lib windows_autostart
 
+  # crates/voxtype-app (M6, egui): clippy, tests and a build on all three
+  # OSes. The crate is a workspace member outside the root's default
+  # members, so the root jobs above never build it.
+  desktop-app:
+    name: desktop-app (${{ matrix.os }})
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: zackees/setup-soldr@v0
+      - name: Install dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libclang-dev cmake
+      - name: Windows build environment
+        if: runner.os == 'Windows'
+        shell: pwsh
+        # Same as the kernal-api job: long paths, a short CARGO_HOME, and no
+        # rustc wrapper for the voxtype lib's long command line.
+        run: |
+          git config --global core.longpaths true
+          "CARGO_HOME=D:\c" >> $env:GITHUB_ENV
+          "SOLDR_RUSTC_WRAPPER=none" >> $env:GITHUB_ENV
+          "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> $env:GITHUB_ENV
+      - name: clippy
+        run: soldr cargo clippy -p voxtype-app --all-targets --no-deps -- -D warnings
+      - name: test
+        run: soldr cargo test -p voxtype-app
+      - name: build
+        run: soldr cargo build -p voxtype-app
+      - name: run --version
+        shell: bash
+        run: target/debug/voxtype-app --version
+
   # Aggregator job: the dev ruleset requires only `ci-success` (through the
   # merge queue). Adding/removing parallel checks above just updates the
   # `needs:` list; the ruleset never needs to be touched.
@@ -136,13 +175,14 @@ jobs:
   # Every job must succeed, with one exception: GitHub's hosted macOS runners
   # sometimes run out of capacity and cancel a job that never got a runner
   # ("The job was not acquired by Runner of type hosted even after multiple
-  # attempts"). A kernal-api (macos-latest) job that ended `cancelled` with no
-  # runner assigned is reported as a warning instead of failing the gate.
+  # attempts"). A kernal-api or desktop-app (macos-latest) job that ended
+  # `cancelled` with no runner assigned is reported as a warning instead of
+  # failing the gate.
   # Windows stays strictly required, and a macOS job that did get a runner and
   # then failed, timed out or was cancelled still fails the gate.
   ci-success:
     name: ci-success
-    needs: [fmt, clippy, test, kernal-api]
+    needs: [fmt, clippy, test, kernal-api, desktop-app]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -155,34 +195,47 @@ jobs:
           CLIPPY: ${{ needs.clippy.result }}
           TEST: ${{ needs.test.result }}
           KERNAL: ${{ needs.kernal-api.result }}
+          DESKTOP_APP: ${{ needs.desktop-app.result }}
         run: |
           set -euo pipefail
           echo "fmt:        $FMT"
           echo "clippy:     $CLIPPY"
           echo "test:       $TEST"
           echo "kernal-api: $KERNAL"
+          echo "desktop-app: $DESKTOP_APP"
           fail=0
           for r in "$FMT" "$CLIPPY" "$TEST"; do
             [[ "$r" == success ]] || fail=1
           done
-          if [[ "$KERNAL" != success ]]; then
-            # needs.kernal-api.result aggregates the matrix; inspect each leg
-            # of this run attempt through the API.
-            jobs=$(gh api --paginate \
-              "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs?per_page=100" \
-              --jq '.jobs[] | select(.name | startswith("kernal-api (")) | [.name, (.conclusion // "none"), (.runner_name // "")] | @tsv')
-            for os in windows-latest macos-latest; do
-              line=$(printf '%s\n' "$jobs" | awk -F'\t' -v n="kernal-api ($os)" '$1 == n' | tail -n 1)
+          jobs=""
+          # A matrix job's result aggregates its legs; inspect each leg of
+          # this run attempt through the API. Usage: check_legs NAME OS...
+          check_legs() {
+            local name=$1 os line conclusion runner
+            shift
+            if [[ -z "$jobs" ]]; then
+              jobs=$(gh api --paginate \
+                "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs?per_page=100" \
+                --jq '.jobs[] | [.name, (.conclusion // "none"), (.runner_name // "")] | @tsv')
+            fi
+            for os in "$@"; do
+              line=$(printf '%s\n' "$jobs" | awk -F'\t' -v n="$name ($os)" '$1 == n' | tail -n 1)
               conclusion=$(printf '%s' "$line" | cut -f2)
               runner=$(printf '%s' "$line" | cut -f3)
-              echo "kernal-api ($os): conclusion=${conclusion:-missing} runner=${runner:-<none>}"
+              echo "$name ($os): conclusion=${conclusion:-missing} runner=${runner:-<none>}"
               [[ "$conclusion" == success ]] && continue
               if [[ "$os" == macos-latest && "$conclusion" == cancelled && -z "$runner" ]]; then
-                echo "::warning::kernal-api (macos-latest) was cancelled before any hosted runner picked it up (runner capacity); not blocking."
+                echo "::warning::$name (macos-latest) was cancelled before any hosted runner picked it up (runner capacity); not blocking."
                 continue
               fi
               fail=1
             done
+          }
+          if [[ "$KERNAL" != success ]]; then
+            check_legs kernal-api windows-latest macos-latest
+          fi
+          if [[ "$DESKTOP_APP" != success ]]; then
+            check_legs desktop-app ubuntu-latest windows-latest macos-latest
           fi
           if [[ "$fail" != 0 ]]; then
             echo "::error::One or more required jobs failed"

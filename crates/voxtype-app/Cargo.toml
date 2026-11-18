@@ -1,0 +1,27 @@
+[package]
+name = "voxtype-app"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Desktop app for the voxtype daemon (egui): status, start/stop and history over the control protocol"
+publish = false
+
+# Not in the root's default-members: `cargo build` / `cargo test` at the repo
+# root build the daemon exactly as before. Build this with
+# `soldr cargo build -p voxtype-app`.
+
+[dependencies]
+voxtype = { path = "../.." }
+# egui on wgpu, the stack picked in docs/GUI-STACK-ADR.md. Default features:
+# wgpu backend, Wayland + X11, AccessKit, default fonts.
+eframe = "0.34"
+serde_json = "1"
+chrono = "0.4"
+
+# The control channel on non-Unix hosts is a kernal-api named pipe.
+[target.'cfg(windows)'.dependencies]
+voxtype = { path = "../..", features = ["kernal-api"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
