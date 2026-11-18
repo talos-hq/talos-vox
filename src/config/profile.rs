@@ -76,6 +76,12 @@ pub struct Profile {
     /// Output mode override for this profile
     #[serde(default)]
     pub output_mode: Option<OutputMode>,
+
+    /// Extra word replacements applied after `[text] replacements` while
+    /// this profile is active (same matching rules). Lets a `[[modes]]`
+    /// entry spell things differently per application.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub replacements: std::collections::HashMap<String, String>,
 }
 
 fn default_post_process_timeout() -> u64 {

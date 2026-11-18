@@ -3566,7 +3566,8 @@ impl Daemon {
                     }
 
                     // Check for profile override from CLI flags
-                    let profile_override = read_profile_override();
+                    let profile_override =
+                        read_profile_override().or_else(|| crate::modes::profile_for(&self.config));
                     let active_profile = profile_override
                         .as_ref()
                         .and_then(|name| self.config.get_profile(name));
@@ -3579,6 +3580,9 @@ impl Daemon {
                             );
                         }
                     }
+
+                    let processed_text =
+                        crate::modes::apply_profile_replacements(active_profile, processed_text);
 
                     // Get context from last dictation if within 60 seconds
                     let recent_context = self.last_dictation.as_ref().and_then(|(text, when)| {

@@ -116,6 +116,11 @@ pub struct Config {
     /// Use with: `voxtype record start --profile slack`
     #[serde(default)]
     pub profiles: HashMap<String, Profile>,
+
+    /// Per-application profile selection, resolved at record start.
+    /// Example: [[modes]] app = ["code"] profile = "code"
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modes: Vec<super::Mode>,
 }
 
 impl Default for Config {
@@ -144,6 +149,7 @@ impl Default for Config {
             history: super::HistoryConfig::default(),
             state_file: default_state_file(),
             profiles: HashMap::new(),
+            modes: Vec::new(),
         }
     }
 }
