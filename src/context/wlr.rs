@@ -261,9 +261,10 @@ impl<S: Read + Write> Conn<S> {
                         0 => t.title = Some(args.string()?),
                         1 => t.app_id = Some(args.string()?),
                         4 => {
-                            t.activated = args.array()?.chunks_exact(4).any(|s| {
-                                u32::from_ne_bytes(s.try_into().unwrap()) == STATE_ACTIVATED
-                            })
+                            let (states, _) = args.array()?.as_chunks::<4>();
+                            t.activated = states
+                                .iter()
+                                .any(|s| u32::from_ne_bytes(*s) == STATE_ACTIVATED)
                         }
                         5 => {
                             let t = t.clone();
