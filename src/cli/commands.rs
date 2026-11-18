@@ -20,6 +20,9 @@ pub enum Commands {
     AppLaunch,
 
     /// Transcribe an audio file (WAV, 16kHz, mono)
+    ///
+    /// The transcript is the only thing written to stdout; progress and logs
+    /// go to stderr. With no speech detected, stdout is empty.
     Transcribe {
         /// Path to audio file
         file: std::path::PathBuf,
@@ -221,10 +224,12 @@ pub enum Commands {
 }
 
 impl Commands {
-    /// Commands whose stdout is a machine protocol, so logs must go to stderr.
+    /// Commands whose stdout is a machine protocol or a result that callers
+    /// capture (the transcript of `voxtype transcribe`), so logs must go to
+    /// stderr.
     pub fn logs_to_stderr(&self) -> bool {
         match self {
-            Commands::TranscribeWorker { .. } => true,
+            Commands::Transcribe { .. } | Commands::TranscribeWorker { .. } => true,
             #[cfg(feature = "mcp")]
             Commands::Mcp => true,
             _ => false,

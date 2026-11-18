@@ -191,6 +191,18 @@ ls ~/.local/share/voxtype/models/parakeet-tdt-0.6b-v3/
 # Should show: encoder-model.onnx, encoder-model.onnx.data, decoder_joint-model.onnx, vocab.txt, config.json
 ```
 
+### "GPU initialisation failed, falling back to CPU"
+
+A CUDA (or TensorRT) build loads Parakeet on the GPU first. If that fails,
+for example because ONNX Runtime can't allocate on a nearly full card
+(`bfc_arena.cc ... Failed to allocate memory`), voxtype logs this warning to
+stderr and loads the model on the CPU instead. Transcription still works, but
+more slowly. Free some GPU memory, or pick a less loaded card with
+`CUDA_VISIBLE_DEVICES`, to get the GPU back.
+
+Setting `CUDA_VISIBLE_DEVICES=-1` (or to an empty value) hides every CUDA
+device, and voxtype then goes straight to the CPU.
+
 ### SIGILL crash on older CPUs
 
 Parakeet binaries include ONNX Runtime, which contains AVX-512 optimized code paths. ONNX Runtime performs CPU feature detection at runtime and should only execute instructions your CPU supports.

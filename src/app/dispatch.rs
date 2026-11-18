@@ -140,7 +140,7 @@ pub(crate) async fn dispatch(
                     }
                 }
             }
-            transcribe_file(&config, &file)?;
+            transcribe_file(&config, &file, cli.quiet)?;
         }
 
         Commands::TranscribeWorker {

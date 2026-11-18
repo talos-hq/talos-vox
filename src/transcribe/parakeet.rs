@@ -55,25 +55,15 @@ impl ParakeetTranscriber {
         );
         let start = std::time::Instant::now();
 
-        // Configure execution provider based on feature flags
-        let exec_config = build_execution_config();
-
-        let model = match model_type {
-            ParakeetModelType::Ctc => {
-                let parakeet =
-                    Parakeet::from_pretrained(&model_path, exec_config).map_err(|e| {
-                        TranscribeError::InitFailed(format!("Parakeet CTC init failed: {}", e))
-                    })?;
-                ParakeetModel::Ctc(Mutex::new(parakeet))
-            }
-            ParakeetModelType::Tdt => {
-                let parakeet =
-                    ParakeetTDT::from_pretrained(&model_path, exec_config).map_err(|e| {
-                        TranscribeError::InitFailed(format!("Parakeet TDT init failed: {}", e))
-                    })?;
-                ParakeetModel::Tdt(Mutex::new(parakeet))
-            }
-        };
+        // Configure execution provider based on feature flags. If the GPU
+        // provider can't create a session (e.g. its arena can't allocate on a
+        // nearly full card), load on CPU instead (#4).
+        let gpu_config = build_execution_config();
+        let model =
+            super::gpu_fallback::init_with_cpu_fallback("Parakeet", gpu_config.is_some(), |gpu| {
+                let exec_config = if gpu { gpu_config.clone() } else { None };
+                load_model(model_type, &model_path, exec_config)
+            })?;
 
         tracing::info!(
             "Parakeet {:?} model loaded in {:.2}s",
@@ -83,6 +73,28 @@ impl ParakeetTranscriber {
 
         Ok(Self { model, model_type })
     }
+}
+
+/// Load a batch Parakeet model with the given execution config (`None` is CPU).
+fn load_model(
+    model_type: ParakeetModelType,
+    model_path: &std::path::Path,
+    exec_config: Option<ExecutionConfig>,
+) -> Result<ParakeetModel, TranscribeError> {
+    Ok(match model_type {
+        ParakeetModelType::Ctc => {
+            let parakeet = Parakeet::from_pretrained(model_path, exec_config).map_err(|e| {
+                TranscribeError::InitFailed(format!("Parakeet CTC init failed: {}", e))
+            })?;
+            ParakeetModel::Ctc(Mutex::new(parakeet))
+        }
+        ParakeetModelType::Tdt => {
+            let parakeet = ParakeetTDT::from_pretrained(model_path, exec_config).map_err(|e| {
+                TranscribeError::InitFailed(format!("Parakeet TDT init failed: {}", e))
+            })?;
+            ParakeetModel::Tdt(Mutex::new(parakeet))
+        }
+    })
 }
 
 impl Transcriber for ParakeetTranscriber {
@@ -290,7 +302,7 @@ impl Transcriber for ParakeetTranscriber {
 pub(super) fn build_execution_config() -> Option<ExecutionConfig> {
     #[cfg(feature = "parakeet-cuda")]
     {
-        if probe_cuda_runtime() {
+        if cuda_usable() {
             super::onnx_ep::keep_ort_environment_until_exit();
             tracing::info!("Configuring CUDA execution provider for NVIDIA GPU acceleration");
             return Some(ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cuda));
@@ -301,7 +313,7 @@ pub(super) fn build_execution_config() -> Option<ExecutionConfig> {
 
     #[cfg(feature = "parakeet-tensorrt")]
     {
-        if probe_cuda_runtime() {
+        if cuda_usable() {
             super::onnx_ep::keep_ort_environment_until_exit();
             tracing::info!("Configuring TensorRT execution provider for NVIDIA GPU acceleration");
             return Some(
@@ -327,6 +339,20 @@ pub(super) fn build_execution_config() -> Option<ExecutionConfig> {
     {
         None
     }
+}
+
+/// Whether to configure a CUDA-based execution provider at all.
+///
+/// With every device hidden (`CUDA_VISIBLE_DEVICES=-1` or empty), ONNX
+/// Runtime would still register the CUDA EP and then fail session creation in
+/// `cuda_call.cc`, so skip straight to CPU (#4).
+#[cfg(any(feature = "parakeet-cuda", feature = "parakeet-tensorrt"))]
+fn cuda_usable() -> bool {
+    if super::gpu_fallback::cuda_hidden_by_env() {
+        tracing::warn!("CUDA_VISIBLE_DEVICES hides every CUDA device");
+        return false;
+    }
+    probe_cuda_runtime()
 }
 
 /// Probe CUDA runtime availability and version compatibility.

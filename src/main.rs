@@ -28,8 +28,9 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
 
-    // Check if this is the worker command (needs stderr-only logging)
-    let stdout_is_protocol = cli.command.as_ref().is_some_and(Commands::logs_to_stderr);
+    // Commands whose stdout carries a protocol or a captured result log to
+    // stderr only (see Commands::logs_to_stderr).
+    let logs_to_stderr = cli.command.as_ref().is_some_and(Commands::logs_to_stderr);
 
     // Initialize logging
     let log_level = if cli.quiet {
@@ -42,8 +43,9 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    if stdout_is_protocol {
-        // Worker and MCP log to stderr: their stdout carries a protocol
+    if logs_to_stderr {
+        // Worker and MCP stdout carry a protocol; transcribe's carries the
+        // transcript
         tracing_subscriber::fmt()
             .with_env_filter(
                 EnvFilter::try_from_default_env()

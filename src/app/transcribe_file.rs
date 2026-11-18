@@ -4,16 +4,41 @@
 //! one call site (this command). Per the refactoring policy: don't extract
 //! an abstraction from a single use site.
 
+use std::io::Write;
 use std::path::Path;
 use voxtype::{config, transcribe, vad};
 
-/// Transcribe an audio file
-pub(crate) fn transcribe_file(config: &config::Config, path: &Path) -> anyhow::Result<()> {
-    let outcome = transcribe_path(config, path, &mut |line| println!("{}", line))?;
-    if let Some(text) = outcome.text {
-        println!("\n{}", text);
-    }
+/// Transcribe an audio file.
+///
+/// stdout carries only the transcript (see [`write_transcript`]); progress
+/// lines go to stderr, and `quiet` drops them. Logs are routed to stderr in
+/// `main` (`Commands::logs_to_stderr`). Callers such as clud's F3 voice mode
+/// capture stdout, so nothing else may be printed there (#4).
+pub(crate) fn transcribe_file(
+    config: &config::Config,
+    path: &Path,
+    quiet: bool,
+) -> anyhow::Result<()> {
+    let outcome = transcribe_path(config, path, &mut |line| {
+        if !quiet {
+            eprintln!("{}", line);
+        }
+    })?;
+    write_transcript(&mut std::io::stdout().lock(), outcome.text.as_deref())?;
     Ok(())
+}
+
+/// The stdout of `voxtype transcribe`: a blank line, then the transcript, or
+/// nothing when VAD found no speech.
+///
+/// The leading blank line is kept from the old format, in which it divided
+/// the logs from the transcript: clud's parser (talos-hq/clud#2673) still
+/// requires it, so dropping it would make clud find no transcript.
+fn write_transcript(out: &mut dyn Write, text: Option<&str>) -> std::io::Result<()> {
+    if let Some(text) = text {
+        writeln!(out, "\n{}", text)?;
+    }
+    out.flush()
 }
 
 /// What [`transcribe_path`] produced.
@@ -26,7 +51,7 @@ pub(crate) struct Outcome {
 }
 
 /// Load, resample, VAD-check and transcribe `path`. Progress lines go to
-/// `progress` (stdout for the CLI, nowhere for `voxtype mcp`, whose stdout
+/// `progress` (stderr for the CLI, nowhere for `voxtype mcp`, whose stdout
 /// is the protocol); warnings go to stderr.
 pub(crate) fn transcribe_path(
     config: &config::Config,
@@ -136,6 +161,23 @@ fn process_transcript(config: &config::Config, text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #4: stdout is the transcript after one blank line, and nothing else.
+    #[test]
+    fn stdout_is_blank_line_then_transcript() {
+        let mut out = Vec::new();
+        write_transcript(&mut out, Some("Hello world.")).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "\nHello world.\n");
+    }
+
+    /// #4: no speech means empty stdout, so a caller can't mistake a status
+    /// line for a transcript.
+    #[test]
+    fn stdout_is_empty_without_speech() {
+        let mut out = Vec::new();
+        write_transcript(&mut out, None).unwrap();
+        assert!(out.is_empty());
+    }
 
     /// #581: `voxtype transcribe <file>` must honor [text] replacements and
     /// spoken punctuation like the daemon does.

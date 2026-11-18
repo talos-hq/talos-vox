@@ -14,6 +14,7 @@
 //! - Optionally OpenVINO Whisper for Intel NPU/CPU/GPU (when `openvino-whisper` feature is enabled)
 
 pub mod cli;
+pub mod gpu_fallback;
 #[cfg(feature = "parakeet")]
 pub mod parakeet_streaming;
 pub mod remote;
@@ -38,7 +39,9 @@ pub use streaming::{SegmentId, StreamHandle, StreamingEvent, StreamingTranscribe
 pub mod fbank;
 
 /// Shared GPU execution-provider registration for ONNX-based engines.
-#[cfg(feature = "onnx-common")]
+/// Parakeet uses only its ONNX Runtime environment pin, so a parakeet-only
+/// build needs the module too.
+#[cfg(any(feature = "parakeet", feature = "onnx-common"))]
 pub mod onnx_ep;
 
 /// Shared CTC greedy decoder for CTC-based ASR engines
