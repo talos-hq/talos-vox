@@ -87,14 +87,18 @@ pub fn register_gpu_eps(
 fn compiled_providers() -> Vec<(&'static str, ExecutionProviderDispatch)> {
     #[allow(unused_mut)]
     let mut providers: Vec<(&'static str, ExecutionProviderDispatch)> = Vec::new();
+    // With every CUDA device hidden, the CUDA and TensorRT EPs register but
+    // session creation then fails in `cuda_call.cc`, so leave them out (#4).
+    #[allow(unused_variables)]
+    let cuda_hidden = super::gpu_fallback::cuda_hidden_by_env();
 
     #[cfg(feature = "onnx-tensorrt-enabled")]
-    {
+    if !cuda_hidden {
         use ort::execution_providers::{ExecutionProvider, TensorRTExecutionProvider};
         providers.push(("TensorRT", TensorRTExecutionProvider::default().build()));
     }
     #[cfg(feature = "onnx-cuda-enabled")]
-    {
+    if !cuda_hidden {
         use ort::execution_providers::{CUDAExecutionProvider, ExecutionProvider};
         providers.push(("CUDA", CUDAExecutionProvider::default().build()));
     }

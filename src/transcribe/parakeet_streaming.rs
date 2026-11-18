@@ -99,16 +99,24 @@ impl ParakeetStreamingTranscriber {
         );
         let start = std::time::Instant::now();
 
-        let exec_config = build_execution_config();
-        let handle = ParakeetUnifiedHandle::load(&model_path, exec_config).map_err(|e| {
-            TranscribeError::InitFailed(format!(
-                "Parakeet streaming (ParakeetUnified) init failed: {}\n\n\
-                Streaming requires a TDT v3 model directory containing tokenizer.model.\n\
-                If you're using a TDT v2 directory, switch to TDT v3 or set\n\
-                [parakeet] streaming = false to use the batch pipeline.",
-                e
-            ))
-        })?;
+        // Fall back to CPU if the GPU provider can't create a session (#4).
+        let gpu_config = build_execution_config();
+        let handle = super::gpu_fallback::init_with_cpu_fallback(
+            "Parakeet streaming",
+            gpu_config.is_some(),
+            |gpu| {
+                let exec_config = if gpu { gpu_config.clone() } else { None };
+                ParakeetUnifiedHandle::load(&model_path, exec_config).map_err(|e| {
+                    TranscribeError::InitFailed(format!(
+                        "Parakeet streaming (ParakeetUnified) init failed: {}\n\n\
+                        Streaming requires a TDT v3 model directory containing tokenizer.model.\n\
+                        If you're using a TDT v2 directory, switch to TDT v3 or set\n\
+                        [parakeet] streaming = false to use the batch pipeline.",
+                        e
+                    ))
+                })
+            },
+        )?;
 
         let streaming_config = UnifiedStreamingConfig {
             chunk_secs: config.streaming_chunk_secs,

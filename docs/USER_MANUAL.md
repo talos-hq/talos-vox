@@ -108,6 +108,11 @@ voxtype --model large-v3 transcribe interview.wav  # Use specific model
 
 Supported formats: WAV (16-bit PCM, 16kHz mono recommended)
 
+stdout carries only the transcript, after one blank line, so scripts can
+capture it directly. Progress lines and logs go to stderr; `-q` drops the
+progress lines and voxtype's logs below error level. When VAD finds no speech,
+stdout is empty and the exit code is 0.
+
 ### `voxtype setup`
 
 Check dependencies and optionally download models.
