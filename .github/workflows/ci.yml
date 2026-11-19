@@ -56,6 +56,12 @@ jobs:
 
       - uses: zackees/setup-soldr@v0
 
+      # setup-soldr may switch to its own minimal-profile toolchain (its own
+      # RUSTUP_HOME), which has no clippy; add it there. Workaround for
+      # forge-ci/setup-soldr #673 (6bd89eb3); remove once the fix ships.
+      - name: Add clippy to the soldr toolchain
+        run: soldr rustup component add clippy --toolchain "${SETUP_SOLDR_TOOLCHAIN_CHANNEL:-stable}"
+
       # Parakeet's GPU paths (the CPU fallback from #4) are only compiled with
       # these features. load-dynamic needs no ONNX Runtime at build time.
       - name: clippy (parakeet-load-dynamic,parakeet-cuda)
@@ -173,6 +179,14 @@ jobs:
           "CARGO_HOME=D:\c" >> $env:GITHUB_ENV
           "SOLDR_RUSTC_WRAPPER=none" >> $env:GITHUB_ENV
           "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> $env:GITHUB_ENV
+      # On macOS setup-soldr forces a managed rustup (its own RUSTUP_HOME,
+      # minimal profile), so the clippy installed above isn't in the
+      # toolchain soldr runs. Add it there; a no-op where it already is.
+      # Workaround for forge-ci/setup-soldr #673 (6bd89eb3); remove once
+      # the fix ships.
+      - name: Add clippy to the soldr toolchain
+        shell: bash
+        run: soldr rustup component add clippy --toolchain "${SETUP_SOLDR_TOOLCHAIN_CHANNEL:-stable}"
       - name: clippy
         run: soldr cargo clippy -p voxtype-app --all-targets --no-deps -- -D warnings
       - name: clippy (linux-tray)
