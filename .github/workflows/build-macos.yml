@@ -22,7 +22,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14  # Apple Silicon runner for ARM64 build
+    runs-on: macos-latest  # Apple Silicon (arm64); macos-14 is no longer offered
     outputs:
       version: ${{ steps.version.outputs.version }}
     # Hoisted to job scope on purpose. A step's `if:` cannot read that same
