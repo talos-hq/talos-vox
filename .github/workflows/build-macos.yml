@@ -296,9 +296,11 @@ jobs:
   # them: `brew style` + `brew audit --cask --strict` (Homebrew is on the
   # Ubuntu runner) and Microsoft's JSON schema for each WinGet file.
   #
-  # Nothing is published. The rendered files are a workflow artifact for the
-  # owner to copy into talos-hq/homebrew-tap and a microsoft/winget-pkgs PR
-  # once the artifacts are signed and notarized. See
+  # The rendered files are always uploaded as a workflow artifact. On a stable
+  # tag (vX.Y.Z, no "-" suffix) the validated cask is then pushed to
+  # talos-hq/homebrew-tap as Casks/voxtype.rb, over SSH with the write deploy
+  # key in HOMEBREW_TAP_DEPLOY_KEY (GITHUB_TOKEN can't push to another repo).
+  # WinGet is not published: the manifest stays an artifact. See
   # packaging/homebrew-tap/README.md.
   package-manifests:
     name: package-manifests
@@ -404,6 +406,77 @@ jobs:
           name: voxtype-${{ needs.build.outputs.version }}-package-manifests
           path: package-manifests
           if-no-files-found: error
+
+      - name: Publish the cask to talos-hq/homebrew-tap
+        # Stable release tags only. Any "-" suffix (v1.2.0-rc1) is a
+        # prerelease, the same rule the release upload steps use, and is
+        # never published to the tap. The validation above has already
+        # passed by the time this runs.
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
+        env:
+          TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${TAP_DEPLOY_KEY}" ]]; then
+            echo "::error::HOMEBREW_TAP_DEPLOY_KEY is not set: the cask was rendered and validated but not published to talos-hq/homebrew-tap"
+            exit 1
+          fi
+          cask="$PWD/package-manifests/homebrew-tap/Casks/voxtype.rb"
+          dmg="voxtype-${VERSION}-macos-universal.dmg"
+
+          # The cask must describe what users will download: a published
+          # (not draft) release whose DMG has the cask's SHA-256. The build
+          # job uploaded it, but a re-run can replace the asset.
+          draft=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
+          if [[ "$draft" != false ]]; then
+            echo "::error::Release ${TAG} is a draft (or missing): not publishing a cask that points at it"
+            exit 1
+          fi
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$dmg" --dir "$RUNNER_TEMP/release"
+          want=$(sha256sum "$RUNNER_TEMP/release/$dmg" | cut -d' ' -f1)
+          if ! grep -q "sha256 \"${want}\"" "$cask"; then
+            echo "::error::The rendered cask's sha256 doesn't match ${dmg} on release ${TAG} (${want})"
+            exit 1
+          fi
+
+          key="$RUNNER_TEMP/homebrew-tap-key"
+          trap 'rm -f "$key"' EXIT
+          (umask 077 && printf '%s\n' "$TAP_DEPLOY_KEY" > "$key")
+          # github.com's published ed25519 host key (GET /meta), pinned.
+          echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" > "$RUNNER_TEMP/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts"
+
+          tap="$RUNNER_TEMP/homebrew-tap"
+          git clone --depth 1 git@github.com:talos-hq/homebrew-tap.git "$tap"
+          cd "$tap"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # The clud release workflow also pushes to this tap's main (it owns
+          # Formula/clud.rb), so a push can lose a race. This job owns only
+          # Casks/voxtype.rb: on a rejected push, take the new main and
+          # recreate the one-file commit on top of it.
+          for attempt in 1 2 3; do
+            mkdir -p Casks
+            cp "$cask" Casks/voxtype.rb
+            git add Casks/voxtype.rb
+            if git diff --cached --quiet; then
+              echo "Casks/voxtype.rb on talos-hq/homebrew-tap is already ${VERSION}: nothing to push"
+              exit 0
+            fi
+            git commit -q -m "voxtype ${VERSION}" \
+              -m "Rendered by talos-hq/talos-vox ${TAG} (${GITHUB_SHA}): ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            if git push origin HEAD:main; then
+              echo "Published voxtype ${VERSION} to talos-hq/homebrew-tap: brew install --cask talos-hq/tap/voxtype"
+              exit 0
+            fi
+            echo "Push rejected (attempt ${attempt}); refetching main"
+            git fetch --depth 1 origin main
+            git reset -q --hard FETCH_HEAD
+          done
+          echo "::error::Could not push Casks/voxtype.rb to talos-hq/homebrew-tap after 3 attempts"
+          exit 1
 
   # Aggregator job — branch protection only needs to require `macos-ci-success`.
   # If we add more macOS jobs (arm64 smoke test, notarization gate, etc.) they
