@@ -29,7 +29,9 @@ the macOS build on every run of that workflow:
 Validation, on the Ubuntu runner:
 
 - Cask: `brew style --cask` and `brew audit --cask --strict` against a
-  throwaway local tap. With no Homebrew installed the script falls back to
+  throwaway local tap. Current Homebrew won't load a cask from an untrusted
+  tap, so the script runs `brew trust --cask` on that one cask for the check
+  and `brew untrust --cask` afterwards. With no Homebrew installed the script falls back to
   `ruby -c`, then to a warning.
 - WinGet: each YAML file against Microsoft's JSON schema for its
   `ManifestVersion` (from `microsoft/winget-cli`, pinned to a commit in the
