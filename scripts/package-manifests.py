@@ -199,12 +199,26 @@ def validate_cask(cask: Path) -> list[str]:
         env = dict(os.environ, HOMEBREW_NO_AUTO_UPDATE="1", HOMEBREW_NO_ANALYTICS="1")
         name = f"{TAP.split('/')[0]}/{TAP.split('/')[1]}-validate/{cask.stem}"
         errors = []
+        trusted = False
         try:
+            # Homebrew refuses to load a cask from a tap that hasn't been
+            # trusted ("Refusing to load cask ... from untrusted tap"). Trust
+            # only this cask, only for the check; style and audit still run in
+            # full. An older brew without `brew trust` has no such gate, and if
+            # trust really was needed the audit below fails anyway.
+            print(f"+ brew trust --cask {name}", flush=True)
+            r = subprocess.run([brew, "trust", "--cask", name], env=env, capture_output=True, text=True)
+            trusted = r.returncode == 0
+            if not trusted:
+                why = (r.stderr.strip().splitlines() or ["no output"])[-1]
+                print(f"::warning::brew trust --cask {name} failed ({why}); this brew may predate tap trust")
             for cmd in (["style", "--cask", name], ["audit", "--cask", "--strict", name]):
                 print("+ brew " + " ".join(cmd), flush=True)
                 if subprocess.run([brew, *cmd], env=env).returncode != 0:
                     errors.append(f"brew {cmd[0]} failed on {cask}")
         finally:
+            if trusted:
+                subprocess.run([brew, "untrust", "--cask", name], env=env, stdout=subprocess.DEVNULL)
             shutil.rmtree(tap, ignore_errors=True)
         return errors
     ruby = shutil.which("ruby")
