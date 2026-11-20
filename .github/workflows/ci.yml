@@ -56,6 +56,22 @@ jobs:
 
       - uses: zackees/setup-soldr@v0
 
+      # Make sure the toolchain soldr runs has a working cargo-clippy. See
+      # the same step in desktop-app below. Workaround for
+      # forge-ci/setup-soldr #673 (6bd89eb3); remove once the fix ships.
+      - name: Ensure clippy in the soldr toolchain
+        shell: bash
+        run: |
+          tc="${SETUP_SOLDR_TOOLCHAIN_CHANNEL:-stable}"
+          ok() { soldr rustup run "$tc" cargo-clippy --version; }
+          ok && exit 0
+          soldr rustup component remove clippy --toolchain "$tc" || true
+          soldr rustup component add clippy --toolchain "$tc"
+          ok && exit 0
+          soldr rustup toolchain uninstall "$tc"
+          soldr rustup toolchain install "$tc" --profile minimal --component clippy
+          ok
+
       # Parakeet's GPU paths (the CPU fallback from #4) are only compiled with
       # these features. load-dynamic needs no ONNX Runtime at build time.
       - name: clippy (parakeet-load-dynamic,parakeet-cuda)
@@ -173,6 +189,27 @@ jobs:
           "CARGO_HOME=D:\c" >> $env:GITHUB_ENV
           "SOLDR_RUSTC_WRAPPER=none" >> $env:GITHUB_ENV
           "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> $env:GITHUB_ENV
+      # On macOS setup-soldr forces a managed rustup with its own RUSTUP_HOME,
+      # so the clippy installed above isn't in the toolchain soldr runs.
+      # Its solo-toolchain-cache also restores a partial toolchain whose
+      # metadata lists clippy without the cargo-clippy binary, which makes
+      # `component add` a no-op. So check that cargo-clippy actually runs,
+      # and if it doesn't, re-add the component, then reinstall the
+      # toolchain. This does nothing where clippy already works.
+      # Workaround for forge-ci/setup-soldr #673 (6bd89eb3); remove once
+      # the fix ships.
+      - name: Ensure clippy in the soldr toolchain
+        shell: bash
+        run: |
+          tc="${SETUP_SOLDR_TOOLCHAIN_CHANNEL:-stable}"
+          ok() { soldr rustup run "$tc" cargo-clippy --version; }
+          ok && exit 0
+          soldr rustup component remove clippy --toolchain "$tc" || true
+          soldr rustup component add clippy --toolchain "$tc"
+          ok && exit 0
+          soldr rustup toolchain uninstall "$tc"
+          soldr rustup toolchain install "$tc" --profile minimal --component clippy
+          ok
       - name: clippy
         run: soldr cargo clippy -p voxtype-app --all-targets --no-deps -- -D warnings
       - name: clippy (linux-tray)
