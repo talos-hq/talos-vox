@@ -5,7 +5,7 @@ installs for us:
 
 | File | Becomes |
 |---|---|
-| `packaging/homebrew-tap/Casks/voxtype.rb.in` | `Casks/voxtype.rb` in [talos-hq/homebrew-tap](https://github.com/talos-hq/homebrew-tap), installed with `brew install --cask talos-hq/tap/voxtype` |
+| `packaging/homebrew-tap/Casks/voxtype.rb.in` | `Casks/voxtype.rb` in [talos-hq/homebrew-tap](https://github.com/talos-hq/homebrew-tap), installed with `brew install --cask talos-hq/tap/voxtype` (from the first tagged release) |
 | `packaging/winget/*.yaml.in` | `manifests/t/TalosHQ/Voxtype/<version>/` in a [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) PR, installed with `winget install TalosHQ.Voxtype` |
 
 `@NAME@` placeholders are filled by `scripts/package-manifests.py`, never by
@@ -25,6 +25,8 @@ the macOS build on every run of that workflow:
    is rendered.
 3. It validates the result and uploads the rendered tree as the
    `voxtype-<version>-package-manifests` workflow artifact.
+4. On a stable tag (`vX.Y.Z`, no `-` suffix) it publishes the cask: see
+   [Publishing](#publishing) below.
 
 Validation, on the Ubuntu runner:
 
@@ -48,26 +50,54 @@ uv run --with pyyaml --with jsonschema python scripts/package-manifests.py \
   validate /tmp/manifests
 ```
 
-## Publishing: owner only, and not yet
+## Publishing
 
-Nothing in CI pushes to the tap or opens a winget-pkgs PR. Both wait on:
+### Homebrew: automatic on every stable tag
 
-- **Signed artifacts.** The cask should point at a notarized DMG (blocked on
-  the notary app-specific password, #23 item 4); WinGet's validation pipeline
-  rejects unsigned installers in practice and SmartScreen warns on them (#23
-  item 5, Azure Artifact Signing).
-- **The Windows installer itself.** There is no Windows release build yet,
-  so the WinGet manifest has no artifact to point at.
-- **Owner approval** to publish under the talos-hq name.
+```sh
+brew install --cask talos-hq/tap/voxtype
+```
 
-Then, per release:
+This works from the first tagged talos-vox release. Before that the tap has no
+`Casks/voxtype.rb`, so the command fails.
+
+The last step of the `package-manifests` job, "Publish the cask to
+talos-hq/homebrew-tap", runs only on a `push` of a `v*` tag without a `-`.
+Prerelease tags (`v1.2.0-rc1`) build, render and validate as usual but are never
+published. The step runs after the validation above has passed, and then:
+
+1. Checks that the release is not a draft and that the DMG attached to it has
+   the SHA-256 in the rendered cask (a re-run can replace the asset).
+2. Clones talos-hq/homebrew-tap over SSH with the write deploy key in the
+   `HOMEBREW_TAP_DEPLOY_KEY` repo secret, pinning github.com's host key.
+   GITHUB_TOKEN can't push to another repository.
+3. Copies the cask to `Casks/voxtype.rb` and commits it as `voxtype <version>`.
+   If the cask is unchanged, as on a re-run, it pushes nothing.
+4. Pushes to `main`. The clud release workflow also pushes to that tap (it owns
+   `Formula/clud.rb`), so a rejected push refetches `main` and recreates the
+   one-file commit, up to three times.
+
+If the secret is missing, the release is a draft, or the checksums disagree,
+the step fails and so does `macos-ci-success`. The rendered cask is still
+uploaded as an artifact first, so it can be copied into the tap by hand:
 
 ```bash
 gh run download <run-id> --repo talos-hq/talos-vox \
   --name voxtype-<version>-package-manifests --dir package-manifests
-# Homebrew: copy into the existing tap repo.
 cp package-manifests/homebrew-tap/Casks/voxtype.rb <homebrew-tap>/Casks/
-# WinGet: open a PR on a winget-pkgs fork.
+```
+
+To rotate the key, generate a new ed25519 keypair, replace the write deploy
+key on talos-hq/homebrew-tap, and pipe the private key into
+`gh secret set HOMEBREW_TAP_DEPLOY_KEY --repo talos-hq/talos-vox`.
+
+### WinGet: not published
+
+The WinGet manifest is rendered and validated but only uploaded as an
+artifact. Nothing opens a microsoft/winget-pkgs PR, and that needs separate
+owner approval. To submit one by hand from the artifact above:
+
+```bash
 cp -r package-manifests/winget/manifests/t <winget-pkgs>/manifests/
 winget validate --manifest <winget-pkgs>/manifests/t/TalosHQ/Voxtype/<version>   # on Windows
 ```

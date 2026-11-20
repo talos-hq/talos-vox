@@ -10,6 +10,14 @@
 
 > [!NOTE]
 > **Install.** This fork has no releases of its own: build it from source with the [Quick Start](#quick-start) below (`cargo build --release`). The prebuilt packages in [docs/INSTALL.md](docs/INSTALL.md) (AUR, `.deb`, `.rpm`, Homebrew) install upstream Voxtype.
+>
+> **macOS (Homebrew), from the first tagged release.** Every stable talos-vox release tag publishes a cask for the notarized app to [talos-hq/homebrew-tap](https://github.com/talos-hq/homebrew-tap):
+>
+> ```sh
+> brew install --cask talos-hq/tap/voxtype
+> ```
+>
+> Until the first `vX.Y.Z` tag is released, the cask isn't in the tap yet and this command fails.
 
 <sub>Talos HQ's header ends here. The upstream Voxtype README follows.</sub>
 
